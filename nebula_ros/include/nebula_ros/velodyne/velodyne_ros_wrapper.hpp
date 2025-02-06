@@ -79,10 +79,9 @@ private:
   void setup_on_hw_reconfigure();
 
   // Decoder thread management
-  void configure_decoder_wrapper_thread();
-  void start_decoder_thread();
-  void stop_decoder_thread();
-  void exit_decoder_thread();
+  void decoder_wrapper_thread(std::stop_token stoken);
+  void set_decoder_wrapper();
+  void stop_decoder_thread() { decoder_thread_.request_stop(); }
 
   /// @brief rclcpp parameter callback
   /// @param parameters Received parameters
@@ -102,10 +101,6 @@ private:
   bool launch_hw_;
   bool use_udp_only_;
 
-  std::mutex decoder_thread_mutex_;
-  std::condition_variable decoder_thread_cv_;
-  bool decoder_thread_running_ = false;
-  bool exit_decoder_thread_ = false;
   bool restart_hw_ = false;
   bool restart_packet_subscriber_ = false;
 
