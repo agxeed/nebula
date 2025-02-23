@@ -39,17 +39,14 @@ HesaiHwInterfaceWrapper::HesaiHwInterfaceWrapper(
     return;
   }
 
-  int retry_count = 0;
-
   while (true) {
     status_ = hw_interface_->initialize_tcp_driver();
     if (status_ == Status::OK || !retry_connect) {
       break;
     }
 
-    retry_count++;
     std::this_thread::sleep_for(std::chrono::milliseconds(8000));  // >5000
-    RCLCPP_WARN_STREAM(logger_, status_ << ". Retry #" << retry_count);
+    RCLCPP_WARN_STREAM_ONCE(logger_, status_ << ". Will keep retrying... ");
   }
 
   if (status_ == Status::OK) {
