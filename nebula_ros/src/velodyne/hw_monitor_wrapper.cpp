@@ -164,12 +164,12 @@ void VelodyneHwMonitorWrapper::initialize_velodyne_diagnostics()
 
   diagnostics_updater_.add(
     "velodyne_status", this, &VelodyneHwMonitorWrapper::velodyne_check_status);
-  diagnostics_updater_.add("velodyne_pps", this, &VelodyneHwMonitorWrapper::velodyne_check_pps);
+  // diagnostics_updater_.add("velodyne_pps", this, &VelodyneHwMonitorWrapper::velodyne_check_pps);
   diagnostics_updater_.add(
     "velodyne_temperature", this, &VelodyneHwMonitorWrapper::velodyne_check_temperature);
   diagnostics_updater_.add("velodyne_rpm", this, &VelodyneHwMonitorWrapper::velodyne_check_rpm);
-  diagnostics_updater_.add(
-    "velodyne_voltage", this, &VelodyneHwMonitorWrapper::velodyne_check_voltage);
+  // diagnostics_updater_.add(
+  //   "velodyne_voltage", this, &VelodyneHwMonitorWrapper::velodyne_check_voltage);
 
   diagnostics_updater_.setPeriod(1.0);
 }
