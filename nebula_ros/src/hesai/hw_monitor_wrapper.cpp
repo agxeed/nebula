@@ -71,7 +71,7 @@ void HesaiHwMonitorWrapper::initialize_hesai_diagnostics(bool monitor_enabled)
   using std::chrono_literals::operator""s;
   std::ostringstream os;
   diagnostics_updater_.add("hesai_status", this, &HesaiHwMonitorWrapper::hesai_check_status);
-  diagnostics_updater_.add("hesai_ptp", this, &HesaiHwMonitorWrapper::hesai_check_ptp);
+  //diagnostics_updater_.add("hesai_ptp", this, &HesaiHwMonitorWrapper::hesai_check_ptp);
   diagnostics_updater_.add(
     "hesai_temperature", this, &HesaiHwMonitorWrapper::hesai_check_temperature);
   diagnostics_updater_.add("hesai_rpm", this, &HesaiHwMonitorWrapper::hesai_check_rpm);
