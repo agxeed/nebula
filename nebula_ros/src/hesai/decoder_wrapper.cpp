@@ -75,8 +75,7 @@ HesaiDecoderWrapper::HesaiDecoderWrapper(
   cloud_watchdog_ =
     std::make_shared<WatchdogTimer>(*parent_node, 100'000us, [this, parent_node](bool ok) {
       if (ok) return;
-      RCLCPP_WARN_THROTTLE(
-        logger_, *parent_node->get_clock(), 5000, "Missed pointcloud output deadline");
+      RCLCPP_WARN_ONCE(logger_, "Missing pointcloud output deadline");
     });
 }
 
