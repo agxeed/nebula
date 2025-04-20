@@ -12,7 +12,7 @@
 namespace nebula::ros
 {
 RobosenseHwMonitorWrapper::RobosenseHwMonitorWrapper(
-  rclcpp::Node * const parent_node,
+  rclcpp_lifecycle::LifecycleNode * const parent_node,
   std::shared_ptr<const nebula::drivers::RobosenseSensorConfiguration> & config)
 : parent_(parent_node),
   logger_(parent_->get_logger().get_child("HwMonitorWrapper")),
@@ -21,7 +21,11 @@ RobosenseHwMonitorWrapper::RobosenseHwMonitorWrapper(
   sensor_cfg_ptr_(config)
 {
   auto descriptor = param_read_only().set__additional_constraints("milliseconds");
-  diag_span_ = parent_->declare_parameter<uint16_t>("diag_span", descriptor);
+  if (parent_->has_parameter("diag_span")) {
+    diag_span_ = parent_->get_parameter("diag_span").as_int();
+  } else {
+    diag_span_ = parent_->declare_parameter<uint16_t>("diag_span", descriptor);
+  }
 }
 
 void RobosenseHwMonitorWrapper::initialize_robosense_diagnostics()

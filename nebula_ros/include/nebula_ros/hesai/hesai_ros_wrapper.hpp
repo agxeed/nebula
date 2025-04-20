@@ -22,8 +22,9 @@
 #include "nebula_ros/hesai/hw_monitor_wrapper.hpp"
 
 #include <ament_index_cpp/get_package_prefix.hpp>
-#include <rclcpp/rclcpp.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
+#include <rclcpp_lifecycle/lifecycle_node.hpp>
+#include <rclcpp_lifecycle/node_interfaces/lifecycle_node_interface.hpp>
 
 #include <nebula_msgs/msg/nebula_packet.hpp>
 #include <pandar_msgs/msg/pandar_scan.hpp>
@@ -42,8 +43,8 @@
 namespace nebula::ros
 {
 
-/// @brief Ros wrapper of hesai driver
-class HesaiRosWrapper final : public rclcpp::Node
+/// @brief ROS 2 Lifecycle Node wrapper for Hesai driver
+class HesaiRosWrapper final : public rclcpp_lifecycle::LifecycleNode
 {
   using get_calibration_result_t = nebula::util::expected<
     std::shared_ptr<drivers::HesaiCalibrationConfigurationBase>, nebula::Status>;
@@ -63,6 +64,27 @@ public:
   /// @brief Start point cloud streaming (Call SensorInterfaceStart of HwInterface)
   /// @return Resulting status
   Status stream_start();
+
+protected:
+  /// @brief Lifecycle state transition: on_configure
+  rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn on_configure(
+    const rclcpp_lifecycle::State & state) override;
+
+  /// @brief Lifecycle state transition: on_activate
+  rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn on_activate(
+    const rclcpp_lifecycle::State & state) override;
+
+  /// @brief Lifecycle state transition: on_deactivate
+  rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn on_deactivate(
+    const rclcpp_lifecycle::State & state) override;
+
+  /// @brief Lifecycle state transition: on_cleanup
+  rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn on_cleanup(
+    const rclcpp_lifecycle::State & state) override;
+
+  /// @brief Lifecycle state transition: on_shutdown
+  rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn on_shutdown(
+    const rclcpp_lifecycle::State & state) override;
 
 private:
   void receive_cloud_packet_callback(const std::vector<uint8_t> & packet);

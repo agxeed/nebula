@@ -21,7 +21,7 @@ namespace nebula::ros
 using namespace std::chrono_literals;  // NOLINT(build/namespaces)
 
 HesaiDecoderWrapper::HesaiDecoderWrapper(
-  rclcpp::Node * const parent_node,
+  rclcpp_lifecycle::LifecycleNode * const parent_node,
   const std::shared_ptr<const nebula::drivers::HesaiSensorConfiguration> & config,
   const std::shared_ptr<const drivers::HesaiCalibrationConfigurationBase> & calibration,
   bool publish_packets)

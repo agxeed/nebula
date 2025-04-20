@@ -14,7 +14,7 @@
 
 #pragma once
 
-#include <rclcpp/rclcpp.hpp>
+#include <rclcpp_lifecycle/lifecycle_node.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -30,8 +30,8 @@ class WatchdogTimer
 
 public:
   WatchdogTimer(
-    rclcpp::Node & node, const std::chrono::microseconds & expected_update_interval,
-    const watchdog_cb_t & callback)
+    rclcpp_lifecycle::LifecycleNode & node,
+    const std::chrono::microseconds & expected_update_interval, const watchdog_cb_t & callback)
   : node_(node),
     callback_(callback),
     expected_update_interval_ns_(
@@ -57,7 +57,7 @@ private:
     callback_(!is_late);
   }
 
-  rclcpp::Node & node_;
+  rclcpp_lifecycle::LifecycleNode & node_;
   rclcpp::TimerBase::SharedPtr timer_;
   std::atomic<uint64_t> last_update_ns_;
   const watchdog_cb_t callback_;

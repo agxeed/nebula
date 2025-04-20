@@ -22,12 +22,40 @@
 namespace nebula::ros
 {
 RobosenseRosWrapper::RobosenseRosWrapper(const rclcpp::NodeOptions & options)
-: rclcpp::Node("robosense_ros_wrapper", rclcpp::NodeOptions(options).use_intra_process_comms(true)),
+: rclcpp_lifecycle::LifecycleNode(
+    "robosense_ros_wrapper", rclcpp::NodeOptions(options).use_intra_process_comms(true)),
   wrapper_status_(Status::NOT_INITIALIZED),
   sensor_cfg_ptr_(nullptr)
 {
   setvbuf(stdout, NULL, _IONBF, BUFSIZ);
 
+  declare_parameter<std::string>("sensor_model", param_read_only());
+  declare_parameter<std::string>("return_mode", param_read_write());
+
+  declare_parameter<std::string>("host_ip", param_read_only());
+  declare_parameter<std::string>("sensor_ip", param_read_only());
+  declare_parameter<uint16_t>("data_port", param_read_only());
+  declare_parameter<uint16_t>("gnss_port", param_read_only());
+  declare_parameter<std::string>("frame_id", param_read_write());
+
+  {
+    rcl_interfaces::msg::ParameterDescriptor descriptor = param_read_write();
+    descriptor.additional_constraints = "Angle where scans begin (degrees, [0.,360.])";
+    descriptor.floating_point_range = float_range(0, 360, 0.01);
+    declare_parameter<double>("scan_phase", descriptor);
+  }
+  {
+    rcl_interfaces::msg::ParameterDescriptor descriptor = param_read_write();
+    descriptor.additional_constraints = "Dual return distance threshold [0.01, 0.5]";
+    descriptor.floating_point_range = float_range(0.01, 0.5, 0.01);
+    declare_parameter<double>("dual_return_distance_threshold", descriptor);
+  }
+  declare_parameter<bool>("launch_hw", param_read_only());
+}
+
+rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+RobosenseRosWrapper::on_configure(const rclcpp_lifecycle::State &)
+{
   wrapper_status_ = declare_and_get_sensor_config_params();
 
   if (wrapper_status_ != Status::OK) {
@@ -38,14 +66,26 @@ RobosenseRosWrapper::RobosenseRosWrapper(const rclcpp::NodeOptions & options)
 
   info_driver_.emplace(sensor_cfg_ptr_);
 
-  launch_hw_ = declare_parameter<bool>("launch_hw", param_read_only());
+  launch_hw_ = get_parameter("launch_hw").as_bool();
 
   if (launch_hw_) {
     hw_interface_wrapper_.emplace(this, sensor_cfg_ptr_);
     hw_monitor_wrapper_.emplace(this, sensor_cfg_ptr_);
   }
 
+  // Register parameter callback after all params have been declared. Otherwise it would be called
+  // once for each declaration
+  parameter_event_cb_ = add_on_set_parameters_callback(
+    std::bind(&RobosenseRosWrapper::on_parameter_change, this, std::placeholders::_1));
+
+  return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
+}
+
+rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+RobosenseRosWrapper::on_activate(const rclcpp_lifecycle::State &)
+{
   RCLCPP_DEBUG(get_logger(), "Starting stream");
+  RCLCPP_INFO(get_logger(), "Activating RobosenseRosWrapper");
 
   if (launch_hw_) {
     info_packets_pub_ =
@@ -72,41 +112,61 @@ RobosenseRosWrapper::RobosenseRosWrapper(const rclcpp::NodeOptions & options)
                       << info_packets_sub_->get_topic_name());
   }
 
-  // Register parameter callback after all params have been declared. Otherwise it would be called
-  // once for each declaration
-  parameter_event_cb_ = add_on_set_parameters_callback(
-    std::bind(&RobosenseRosWrapper::on_parameter_change, this, std::placeholders::_1));
+  return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
+}
+
+rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+RobosenseRosWrapper::on_deactivate(const rclcpp_lifecycle::State &)
+{
+  RCLCPP_INFO(get_logger(), "Deactivating RobosenseRosWrapper");
+
+  // if (launch_hw_) {
+  //   hw_interface_wrapper_->hw_interface()->unregister_scan_callback();
+  // } else {
+  //   packets_sub_.reset();
+  // }
+
+  return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
+}
+
+rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+RobosenseRosWrapper::on_cleanup(const rclcpp_lifecycle::State &)
+{
+  RCLCPP_INFO(get_logger(), "Cleaning up RobosenseRosWrapper");
+
+  hw_interface_wrapper_.reset();
+  hw_monitor_wrapper_.reset();
+  decoder_wrapper_.reset();
+  packets_sub_.reset();
+
+  return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
+}
+
+rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+RobosenseRosWrapper::on_shutdown(const rclcpp_lifecycle::State &)
+{
+  RCLCPP_INFO(get_logger(), "Shutting down RobosenseRosWrapper");
+  return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
 }
 
 nebula::Status RobosenseRosWrapper::declare_and_get_sensor_config_params()
 {
   nebula::drivers::RobosenseSensorConfiguration config;
 
-  auto _sensor_model = declare_parameter<std::string>("sensor_model", param_read_only());
+  auto _sensor_model = get_parameter("sensor_model").as_string();
   config.sensor_model = drivers::sensor_model_from_string(_sensor_model);
 
-  auto _return_mode = declare_parameter<std::string>("return_mode", param_read_write());
+  auto _return_mode = get_parameter("return_mode").as_string();
   config.return_mode = drivers::return_mode_from_string_robosense(_return_mode);
 
-  config.host_ip = declare_parameter<std::string>("host_ip", param_read_only());
-  config.sensor_ip = declare_parameter<std::string>("sensor_ip", param_read_only());
-  config.data_port = declare_parameter<uint16_t>("data_port", param_read_only());
-  config.gnss_port = declare_parameter<uint16_t>("gnss_port", param_read_only());
-  config.frame_id = declare_parameter<std::string>("frame_id", param_read_write());
-
-  {
-    rcl_interfaces::msg::ParameterDescriptor descriptor = param_read_write();
-    descriptor.additional_constraints = "Angle where scans begin (degrees, [0.,360.])";
-    descriptor.floating_point_range = float_range(0, 360, 0.01);
-    config.scan_phase = declare_parameter<double>("scan_phase", descriptor);
-  }
-  {
-    rcl_interfaces::msg::ParameterDescriptor descriptor = param_read_write();
-    descriptor.additional_constraints = "Dual return distance threshold [0.01, 0.5]";
-    descriptor.floating_point_range = float_range(0.01, 0.5, 0.01);
-    config.dual_return_distance_threshold =
-      declare_parameter<double>("dual_return_distance_threshold", descriptor);
-  }
+  config.host_ip = get_parameter("host_ip").as_string();
+  config.sensor_ip = get_parameter("sensor_ip").as_string();
+  config.data_port = get_parameter("data_port").as_int();
+  config.gnss_port = get_parameter("gnss_port").as_int();
+  config.frame_id = get_parameter("frame_id").as_string();
+  config.scan_phase = get_parameter("scan_phase").as_double();
+  config.dual_return_distance_threshold =
+    get_parameter("dual_return_distance_threshold").as_double();
 
   auto new_cfg_ptr = std::make_shared<const nebula::drivers::RobosenseSensorConfiguration>(config);
   return validate_and_set_config(new_cfg_ptr);

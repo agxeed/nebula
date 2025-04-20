@@ -174,10 +174,13 @@ public:
   /// @return Resulting status
   Status set_sensor_configuration(
     std::shared_ptr<const VelodyneSensorConfiguration> sensor_configuration);
-  /// @brief Registering callback for PandarScan
+  /// @brief Registering callback for VelodyneScan
   /// @param scan_callback Callback function
   /// @return Resulting status
   Status register_scan_callback(std::function<void(std::vector<uint8_t> & packet)> scan_callback);
+
+  /// @brief De-registering callback for VelodyneScan
+  void deregister_scan_callback();
 
   /// @brief Parsing JSON string to property_tree
   /// @param str JSON string

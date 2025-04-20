@@ -86,6 +86,18 @@ Status VelodyneHwInterface::register_scan_callback(
   return Status::OK;
 }
 
+void VelodyneHwInterface::deregister_scan_callback()
+{
+  // Close UDP socket first and then http client and then reset callback.
+  if (cloud_udp_driver_->receiver()->isOpen()) {
+    cloud_udp_driver_->receiver()->close();
+  }
+  if (http_client_driver_->client()->isOpen()) {
+    http_client_driver_->client()->close();
+  }
+  cloud_packet_callback_ = nullptr;
+}
+
 void VelodyneHwInterface::receive_sensor_packet_callback(std::vector<uint8_t> & buffer)
 {
   if (!cloud_packet_callback_) {

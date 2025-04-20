@@ -106,6 +106,19 @@ Status RobosenseHwInterface::register_scan_callback(
   return Status::OK;
 }
 
+void RobosenseHwInterface::deregister_scan_callback()
+{
+  // Close UDP socket first and then reset the callback.
+  if (cloud_udp_driver_->receiver()->isOpen()) {
+    cloud_udp_driver_->receiver()->close();
+  }
+  // Close info UDP socket as well.
+  if (info_udp_driver_->receiver()->isOpen()) {
+    info_udp_driver_->receiver()->close();
+  }
+  scan_reception_callback_ = nullptr;
+}
+
 Status RobosenseHwInterface::register_info_callback(
   std::function<void(std::vector<uint8_t> &)> info_callback)
 {

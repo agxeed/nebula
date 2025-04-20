@@ -22,7 +22,7 @@
 #include <nebula_common/util/expected.hpp>
 #include <nebula_decoders/nebula_decoders_continental/decoders/continental_srr520_decoder.hpp>
 #include <nebula_hw_interfaces/nebula_hw_interfaces_continental/continental_srr520_hw_interface.hpp>
-#include <rclcpp/rclcpp.hpp>
+#include <rclcpp_lifecycle/lifecycle_node.hpp>
 
 #include <continental_msgs/msg/continental_srr520_detection.hpp>
 #include <continental_msgs/msg/continental_srr520_detection_list.hpp>
@@ -47,7 +47,7 @@ class ContinentalSRR520DecoderWrapper
 {
 public:
   ContinentalSRR520DecoderWrapper(
-    rclcpp::Node * const parent_node,
+    rclcpp_lifecycle::LifecycleNode * const parent_node,
     std::shared_ptr<const drivers::continental_srr520::ContinentalSRR520SensorConfiguration> &
       config,
     std::shared_ptr<drivers::continental_srr520::ContinentalSRR520HwInterface> hw_interface_ptr);
@@ -125,7 +125,7 @@ private:
   visualization_msgs::msg::MarkerArray convert_to_markers(
     const continental_msgs::msg::ContinentalSrr520ObjectList & msg);
 
-  const rclcpp::Node * const parent_node_;
+  const rclcpp_lifecycle::LifecycleNode * const parent_node_;
   nebula::Status status_;
   rclcpp::Logger logger_;
 

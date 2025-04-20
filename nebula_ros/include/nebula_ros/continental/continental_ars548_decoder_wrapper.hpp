@@ -21,7 +21,7 @@
 #include <nebula_common/nebula_common.hpp>
 #include <nebula_common/util/expected.hpp>
 #include <nebula_decoders/nebula_decoders_continental/decoders/continental_ars548_decoder.hpp>
-#include <rclcpp/rclcpp.hpp>
+#include <rclcpp_lifecycle/lifecycle_node.hpp>
 
 #include <continental_msgs/msg/continental_ars548_detection.hpp>
 #include <continental_msgs/msg/continental_ars548_detection_list.hpp>
@@ -46,7 +46,7 @@ class ContinentalARS548DecoderWrapper
 {
 public:
   ContinentalARS548DecoderWrapper(
-    rclcpp::Node * const parent_node,
+    rclcpp_lifecycle::LifecycleNode * const parent_node,
     std::shared_ptr<
       const nebula::drivers::continental_ars548::ContinentalARS548SensorConfiguration> & config,
     bool launch_hw);

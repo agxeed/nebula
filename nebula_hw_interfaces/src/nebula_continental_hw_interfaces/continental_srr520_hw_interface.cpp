@@ -149,6 +149,13 @@ Status ContinentalSRR520HwInterface::register_packet_callback(
   return Status::OK;
 }
 
+void ContinentalSRR520HwInterface::deregister_packet_callback()
+{
+  // Stop sensor interface first and then reset callback.
+  sensor_interface_stop();
+  nebula_packet_callback_ = nullptr;
+}
+
 void ContinentalSRR520HwInterface::sensor_sync_follow_up(builtin_interfaces::msg::Time stamp)
 {
   if (!can_sender_ptr_) {

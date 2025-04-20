@@ -19,7 +19,7 @@
 #include <nebula_common/continental/continental_ars548.hpp>
 #include <nebula_common/util/rate_checker.hpp>
 #include <nebula_hw_interfaces/nebula_hw_interfaces_continental/continental_ars548_hw_interface.hpp>
-#include <rclcpp/rclcpp.hpp>
+#include <rclcpp_lifecycle/lifecycle_node.hpp>
 
 #include <continental_srvs/srv/continental_ars548_set_network_configuration.hpp>
 #include <continental_srvs/srv/continental_ars548_set_radar_parameters.hpp>
@@ -37,7 +37,7 @@ class ContinentalARS548HwInterfaceWrapper
 {
 public:
   ContinentalARS548HwInterfaceWrapper(
-    rclcpp::Node * const parent_node,
+    rclcpp_lifecycle::LifecycleNode * const parent_node,
     std::shared_ptr<const drivers::continental_ars548::ContinentalARS548SensorConfiguration> &
       config);
 
@@ -103,7 +103,7 @@ private:
     const std::shared_ptr<continental_srvs::srv::ContinentalArs548SetRadarParameters::Response>
       response);
 
-  rclcpp::Node * const parent_node_;
+  rclcpp_lifecycle::LifecycleNode * const parent_node_;
   std::shared_ptr<drivers::continental_ars548::ContinentalARS548HwInterface> hw_interface_{};
   rclcpp::Logger logger_;
   nebula::Status status_{};

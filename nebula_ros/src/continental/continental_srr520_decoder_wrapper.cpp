@@ -25,7 +25,7 @@
 namespace nebula::ros
 {
 ContinentalSRR520DecoderWrapper::ContinentalSRR520DecoderWrapper(
-  rclcpp::Node * const parent_node,
+  rclcpp_lifecycle::LifecycleNode * const parent_node,
   std::shared_ptr<const nebula::drivers::continental_srr520::ContinentalSRR520SensorConfiguration> &
     config,
   std::shared_ptr<drivers::continental_srr520::ContinentalSRR520HwInterface> hw_interface_ptr)

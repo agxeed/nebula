@@ -21,7 +21,7 @@
 #include <nebula_common/robosense/robosense_common.hpp>
 #include <nebula_decoders/nebula_decoders_robosense/robosense_driver.hpp>
 #include <nebula_hw_interfaces/nebula_hw_interfaces_robosense/robosense_hw_interface.hpp>
-#include <rclcpp/rclcpp.hpp>
+#include <rclcpp_lifecycle/lifecycle_node.hpp>
 
 #include <nebula_msgs/msg/nebula_packet.hpp>
 #include <robosense_msgs/msg/robosense_scan.hpp>
@@ -36,7 +36,7 @@ class RobosenseDecoderWrapper
 {
 public:
   explicit RobosenseDecoderWrapper(
-    rclcpp::Node * const parent_node,
+    rclcpp_lifecycle::LifecycleNode * const parent_node,
     const std::shared_ptr<nebula::drivers::RobosenseHwInterface> & hw_interface,
     const std::shared_ptr<const nebula::drivers::RobosenseSensorConfiguration> & config,
     const std::shared_ptr<const nebula::drivers::RobosenseCalibrationConfiguration> & calibration);

@@ -19,7 +19,7 @@
 #include <nebula_hw_interfaces/nebula_hw_interfaces_hesai/hesai_cmd_response.hpp>
 #include <nebula_hw_interfaces/nebula_hw_interfaces_hesai/hesai_hw_interface.hpp>
 #include <nlohmann/json.hpp>
-#include <rclcpp/rclcpp.hpp>
+#include <rclcpp_lifecycle/lifecycle_node.hpp>
 
 #include <boost/asio.hpp>
 #include <boost/lexical_cast.hpp>
@@ -38,7 +38,7 @@ class HesaiHwMonitorWrapper
 {
 public:
   HesaiHwMonitorWrapper(
-    rclcpp::Node * const parent_node,
+    rclcpp_lifecycle::LifecycleNode * const parent_node,
     const std::shared_ptr<nebula::drivers::HesaiHwInterface> & hw_interface,
     std::shared_ptr<const nebula::drivers::HesaiSensorConfiguration> & config);
 
@@ -83,7 +83,7 @@ private:
   nebula::Status status_;
 
   const std::shared_ptr<nebula::drivers::HesaiHwInterface> hw_interface_;
-  rclcpp::Node * const parent_node_;
+  rclcpp_lifecycle::LifecycleNode * const parent_node_;
 
   uint16_t diag_span_;
   rclcpp::TimerBase::SharedPtr diagnostics_update_timer_{};

@@ -19,7 +19,7 @@
 #include <nebula_common/nebula_common.hpp>
 #include <nebula_common/robosense/robosense_common.hpp>
 #include <nebula_hw_interfaces/nebula_hw_interfaces_robosense/robosense_hw_interface.hpp>
-#include <rclcpp/rclcpp.hpp>
+#include <rclcpp_lifecycle/lifecycle_node.hpp>
 
 #include <boost/algorithm/string/join.hpp>
 #include <boost/asio.hpp>
@@ -38,7 +38,7 @@ class RobosenseHwMonitorWrapper
 {
 public:
   explicit RobosenseHwMonitorWrapper(
-    rclcpp::Node * const parent_node,
+    rclcpp_lifecycle::LifecycleNode * const parent_node,
     std::shared_ptr<const nebula::drivers::RobosenseSensorConfiguration> & config);
 
   void on_config_change(
@@ -58,7 +58,7 @@ private:
   /// @param diagnostics DiagnosticStatusWrapper
   void robosense_check_status(diagnostic_updater::DiagnosticStatusWrapper & diagnostics);
 
-  rclcpp::Node * parent_;
+  rclcpp_lifecycle::LifecycleNode * parent_;
   rclcpp::Logger logger_;
   std::optional<diagnostic_updater::Updater> diagnostics_updater_;
   nebula::Status status_;

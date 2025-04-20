@@ -13,19 +13,29 @@
 namespace nebula::ros
 {
 VelodyneHwMonitorWrapper::VelodyneHwMonitorWrapper(
-  rclcpp::Node * const parent_node,
+  rclcpp_lifecycle::LifecycleNode * const parent_node,
   const std::shared_ptr<nebula::drivers::VelodyneHwInterface> & hw_interface,
   std::shared_ptr<const nebula::drivers::VelodyneSensorConfiguration> & config)
 : logger_(parent_node->get_logger().get_child("HwMonitor")),
   diagnostics_updater_(
-    (parent_node->declare_parameter<bool>("diagnostic_updater.use_fqn", true), parent_node)),
+    (parent_node->get_parameter("diagnostic_updater.use_fqn").as_bool(), parent_node)),
   hw_interface_(hw_interface),
   parent_node_(parent_node),
   sensor_configuration_(config)
 {
-  diag_span_ = parent_node->declare_parameter<uint16_t>("diag_span", param_read_only());
-  show_advanced_diagnostics_ =
-    parent_node->declare_parameter<bool>("advanced_diagnostics", param_read_only());
+  // Check if parameters already exist before declaring them
+  if (!parent_node->has_parameter("diag_span")) {
+    diag_span_ = parent_node->declare_parameter<uint16_t>("diag_span", param_read_only());
+  } else {
+    diag_span_ = parent_node->get_parameter("diag_span").as_int();
+  }
+
+  if (!parent_node->has_parameter("advanced_diagnostics")) {
+    show_advanced_diagnostics_ =
+      parent_node->declare_parameter<bool>("advanced_diagnostics", param_read_only());
+  } else {
+    show_advanced_diagnostics_ = parent_node->get_parameter("advanced_diagnostics").as_bool();
+  }
 
   std::cout << "Get model name and serial." << std::endl;
   auto str = hw_interface_->get_snapshot();

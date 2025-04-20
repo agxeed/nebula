@@ -215,6 +215,12 @@ Status HesaiHwInterface::sensor_interface_stop()
   return Status::OK;
 }
 
+void HesaiHwInterface::deregister_scan_callback()
+{
+  sensor_interface_stop();
+  cloud_packet_callback_ = nullptr;
+}
+
 Status HesaiHwInterface::get_sensor_configuration(
   const SensorConfigurationBase & sensor_configuration)
 {

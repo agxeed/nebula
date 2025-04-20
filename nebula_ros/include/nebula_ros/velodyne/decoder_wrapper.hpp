@@ -22,7 +22,7 @@
 #include <nebula_common/velodyne/velodyne_common.hpp>
 #include <nebula_decoders/nebula_decoders_velodyne/velodyne_driver.hpp>
 #include <nebula_hw_interfaces/nebula_hw_interfaces_velodyne/velodyne_hw_interface.hpp>
-#include <rclcpp/rclcpp.hpp>
+#include <rclcpp_lifecycle/lifecycle_node.hpp>
 
 #include <nebula_msgs/msg/nebula_packet.hpp>
 #include <velodyne_msgs/msg/velodyne_packet.hpp>
@@ -43,7 +43,7 @@ class VelodyneDecoderWrapper
 
 public:
   VelodyneDecoderWrapper(
-    rclcpp::Node * const parent_node,
+    rclcpp_lifecycle::LifecycleNode * const parent_node,
     const std::shared_ptr<nebula::drivers::VelodyneHwInterface> & hw_interface,
     std::shared_ptr<const nebula::drivers::VelodyneSensorConfiguration> & config);
 

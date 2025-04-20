@@ -22,8 +22,9 @@
 #include <nebula_common/nebula_common.hpp>
 #include <nebula_common/nebula_status.hpp>
 #include <nebula_hw_interfaces/nebula_hw_interfaces_continental/continental_srr520_hw_interface.hpp>
-#include <rclcpp/rclcpp.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
+#include <rclcpp_lifecycle/lifecycle_node.hpp>
+#include <rclcpp_lifecycle/node_interfaces/lifecycle_node_interface.hpp>
 
 #include <nebula_msgs/msg/nebula_packet.hpp>
 
@@ -37,7 +38,7 @@ namespace nebula::ros
 {
 
 /// @brief Ros wrapper of continental srr520 driver
-class ContinentalSRR520RosWrapper final : public rclcpp::Node
+class ContinentalSRR520RosWrapper final : public rclcpp_lifecycle::LifecycleNode
 {
 public:
   explicit ContinentalSRR520RosWrapper(const rclcpp::NodeOptions & options);
@@ -50,6 +51,27 @@ public:
   /// @brief Start data streaming (Call SensorInterfaceStart of HwInterface)
   /// @return Resulting status
   Status stream_start();
+
+protected:
+  /// @brief Lifecycle state transition: on_configure
+  rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn on_configure(
+    const rclcpp_lifecycle::State & state) override;
+
+  /// @brief Lifecycle state transition: on_activate
+  rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn on_activate(
+    const rclcpp_lifecycle::State & state) override;
+
+  /// @brief Lifecycle state transition: on_deactivate
+  rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn on_deactivate(
+    const rclcpp_lifecycle::State & state) override;
+
+  /// @brief Lifecycle state transition: on_cleanup
+  rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn on_cleanup(
+    const rclcpp_lifecycle::State & state) override;
+
+  /// @brief Lifecycle state transition: on_shutdown
+  rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn on_shutdown(
+    const rclcpp_lifecycle::State & state) override;
 
 private:
   /// @brief Callback from the hw interface's raw data

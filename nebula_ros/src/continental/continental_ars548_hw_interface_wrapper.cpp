@@ -27,7 +27,7 @@ namespace nebula::ros
 {
 
 ContinentalARS548HwInterfaceWrapper::ContinentalARS548HwInterfaceWrapper(
-  rclcpp::Node * const parent_node,
+  rclcpp_lifecycle::LifecycleNode * const parent_node,
   std::shared_ptr<const nebula::drivers::continental_ars548::ContinentalARS548SensorConfiguration> &
     config_ptr)
 : parent_node_(parent_node),

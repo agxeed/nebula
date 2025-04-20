@@ -14,7 +14,7 @@ namespace nebula::ros
 {
 
 HesaiHwInterfaceWrapper::HesaiHwInterfaceWrapper(
-  rclcpp::Node * const parent_node,
+  rclcpp_lifecycle::LifecycleNode * const parent_node,
   std::shared_ptr<const nebula::drivers::HesaiSensorConfiguration> & config, bool use_udp_only)
 : hw_interface_(
     std::make_shared<drivers::HesaiHwInterface>(
@@ -23,8 +23,17 @@ HesaiHwInterfaceWrapper::HesaiHwInterfaceWrapper(
   status_(Status::NOT_INITIALIZED),
   use_udp_only_(use_udp_only)
 {
-  setup_sensor_ = parent_node->declare_parameter<bool>("setup_sensor", param_read_only());
-  bool retry_connect = parent_node->declare_parameter<bool>("retry_hw", param_read_only());
+  if (parent_node->has_parameter("setup_sensor")) {
+    setup_sensor_ = parent_node->get_parameter("setup_sensor").as_bool();
+  } else {
+    setup_sensor_ = parent_node->declare_parameter<bool>("setup_sensor", param_read_only());
+  }
+  bool retry_connect;
+  if (parent_node->has_parameter("retry_hw")) {
+    retry_connect = parent_node->get_parameter("retry_hw").as_bool();
+  } else {
+    retry_connect = parent_node->declare_parameter<bool>("retry_hw", param_read_only());
+  }
 
   status_ = hw_interface_->set_sensor_configuration(
     std::static_pointer_cast<const drivers::SensorConfigurationBase>(config));

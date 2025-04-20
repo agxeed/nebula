@@ -25,7 +25,8 @@
 namespace nebula::ros
 {
 HesaiRosWrapper::HesaiRosWrapper(const rclcpp::NodeOptions & options)
-: rclcpp::Node("hesai_ros_wrapper", rclcpp::NodeOptions(options).use_intra_process_comms(true)),
+: rclcpp_lifecycle::LifecycleNode(
+    "hesai_ros_wrapper", rclcpp::NodeOptions(options).use_intra_process_comms(true)),
   wrapper_status_(Status::NOT_INITIALIZED),
   sensor_cfg_ptr_(nullptr),
   hw_interface_wrapper_(),
@@ -34,16 +35,78 @@ HesaiRosWrapper::HesaiRosWrapper(const rclcpp::NodeOptions & options)
 {
   setvbuf(stdout, nullptr, _IONBF, BUFSIZ);
 
+  // Declare parameters here to make them available before lifecycle transitions
+  declare_parameter<bool>("launch_hw", param_read_only());
+  declare_parameter<bool>("udp_only", param_read_only());
+  declare_parameter<std::string>("sensor_model", param_read_only());
+  declare_parameter<std::string>("return_mode", param_read_write());
+  declare_parameter<std::string>("host_ip", param_read_only());
+  declare_parameter<std::string>("sensor_ip", param_read_only());
+  declare_parameter<std::string>("multicast_ip", param_read_only());
+  declare_parameter<uint16_t>("data_port", param_read_only());
+  declare_parameter<uint16_t>("gnss_port", param_read_only());
+  declare_parameter<std::string>("frame_id", param_read_write());
+
+  {
+    rcl_interfaces::msg::ParameterDescriptor descriptor = param_read_write();
+    descriptor.floating_point_range = float_range(0, 360, 0.01);
+    descriptor.description =
+      "Angle at which to cut the scan. Cannot be equal to the start angle in a non-360 deg "
+      "FoV. Choose the end angle instead.";
+    declare_parameter<double>("cut_angle", descriptor);
+  }
+  declare_parameter<double>("min_range", param_read_write());
+  declare_parameter<double>("max_range", param_read_write());
+  declare_parameter<uint16_t>("packet_mtu_size", param_read_only());
+
+  {
+    rcl_interfaces::msg::ParameterDescriptor descriptor = param_read_write();
+    descriptor.integer_range = int_range(0, 360, 1);
+    declare_parameter<uint16_t>("cloud_min_angle", descriptor);
+  }
+  {
+    rcl_interfaces::msg::ParameterDescriptor descriptor = param_read_write();
+    descriptor.integer_range = int_range(0, 360, 1);
+    declare_parameter<uint16_t>("cloud_max_angle", descriptor);
+  }
+  {
+    rcl_interfaces::msg::ParameterDescriptor descriptor = param_read_write();
+    descriptor.additional_constraints = "Dual return distance threshold [0.01, 0.5]";
+    descriptor.floating_point_range = float_range(0.01, 0.5, 0.01);
+    declare_parameter<double>("dual_return_distance_threshold", descriptor);
+  }
+  declare_parameter<std::string>("ptp_profile", param_read_only());
+  declare_parameter<std::string>("ptp_transport_type", param_read_only());
+  declare_parameter<std::string>("ptp_switch_type", param_read_only());
+
+  {
+    rcl_interfaces::msg::ParameterDescriptor descriptor = param_read_only();
+    descriptor.integer_range = int_range(0, 127, 1);
+    declare_parameter<uint8_t>("ptp_domain", descriptor);
+  }
+  {
+    rcl_interfaces::msg::ParameterDescriptor descriptor = param_read_only();
+    descriptor.integer_range = int_range(1, 100, 1);
+    declare_parameter<uint8_t>("ptp_lock_threshold", descriptor);
+  }
+  declare_parameter<std::string>("point_filters.downsample_mask.path", "", param_read_write());
+}
+
+rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+HesaiRosWrapper::on_configure(const rclcpp_lifecycle::State &)
+{
   wrapper_status_ = declare_and_get_sensor_config_params();
 
   if (wrapper_status_ != Status::OK) {
-    throw std::runtime_error("Sensor configuration invalid: " + util::to_string(wrapper_status_));
+    RCLCPP_ERROR(
+      get_logger(), "Sensor configuration invalid: %s", util::to_string(wrapper_status_).c_str());
+    return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::FAILURE;
   }
 
   RCLCPP_INFO_STREAM(get_logger(), "Sensor Configuration: " << *sensor_cfg_ptr_);
 
-  launch_hw_ = declare_parameter<bool>("launch_hw", param_read_only());
-  bool use_udp_only = declare_parameter<bool>("udp_only", param_read_only());
+  launch_hw_ = get_parameter("launch_hw").as_bool();
+  bool use_udp_only = get_parameter("udp_only").as_bool();
 
   if (use_udp_only) {
     RCLCPP_INFO_STREAM(
@@ -54,40 +117,48 @@ HesaiRosWrapper::HesaiRosWrapper(const rclcpp::NodeOptions & options)
 
   if (launch_hw_) {
     hw_interface_wrapper_.emplace(this, sensor_cfg_ptr_, use_udp_only);
+    if (!this->has_parameter("diagnostic_updater.use_fqn")) {
+      this->declare_parameter<bool>("diagnostic_updater.use_fqn", true);
+    }
     if (!use_udp_only) {  // hardware monitor requires TCP connection
       hw_monitor_wrapper_.emplace(this, hw_interface_wrapper_->hw_interface(), sensor_cfg_ptr_);
     }
   }
 
-  bool force_load_caibration_from_file =
+  bool force_load_calibration_from_file =
     use_udp_only;  // Downloading from device requires TCP connection
   auto calibration_result =
-    get_calibration_data(sensor_cfg_ptr_->calibration_path, force_load_caibration_from_file);
+    get_calibration_data(sensor_cfg_ptr_->calibration_path, force_load_calibration_from_file);
   if (!calibration_result.has_value()) {
-    throw std::runtime_error(
-      "No valid calibration found: " + util::to_string(calibration_result.error()));
-  }
-
-  bool lidar_range_supported =
-    sensor_cfg_ptr_->sensor_model != drivers::SensorModel::HESAI_PANDARAT128 &&
-    sensor_cfg_ptr_->sensor_model != drivers::SensorModel::HESAI_PANDAR64;
-
-  if (hw_interface_wrapper_ && !use_udp_only && lidar_range_supported) {
-    auto status =
-      hw_interface_wrapper_->hw_interface()->check_and_set_lidar_range(*calibration_result.value());
-    if (status != Status::OK) {
-      throw std::runtime_error("Could not set sensor FoV: " + util::to_string(status));
-    }
+    RCLCPP_ERROR(
+      get_logger(), "No valid calibration found: %s",
+      util::to_string(calibration_result.error()).c_str());
+    return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::FAILURE;
   }
 
   decoder_wrapper_.emplace(this, sensor_cfg_ptr_, calibration_result.value(), launch_hw_);
 
-  RCLCPP_DEBUG(get_logger(), "Starting stream");
+  // Register parameter callback after all params have been declared. Otherwise it would be called
+  // once for each declaration
+  parameter_event_cb_ = add_on_set_parameters_callback(
+    std::bind(&HesaiRosWrapper::on_parameter_change, this, std::placeholders::_1));
+
+  return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
+}
+
+rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+HesaiRosWrapper::on_activate(const rclcpp_lifecycle::State &)
+{
+  RCLCPP_INFO(get_logger(), "Activating HesaiRosWrapper");
 
   if (launch_hw_) {
     hw_interface_wrapper_->hw_interface()->register_scan_callback(
       std::bind(&HesaiRosWrapper::receive_cloud_packet_callback, this, std::placeholders::_1));
-    stream_start();
+    auto status = stream_start();
+    if (status != Status::OK) {
+      RCLCPP_ERROR(get_logger(), "Failed to start stream: %s", util::to_string(status).c_str());
+      return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::FAILURE;
+    }
   } else {
     packets_sub_ = create_subscription<pandar_msgs::msg::PandarScan>(
       "pandar_packets", rclcpp::SensorDataQoS(),
@@ -97,37 +168,59 @@ HesaiRosWrapper::HesaiRosWrapper(const rclcpp::NodeOptions & options)
       "Hardware connection disabled, listening for packets on " << packets_sub_->get_topic_name());
   }
 
-  // Register parameter callback after all params have been declared. Otherwise it would be called
-  // once for each declaration
-  parameter_event_cb_ = add_on_set_parameters_callback(
-    std::bind(&HesaiRosWrapper::on_parameter_change, this, std::placeholders::_1));
+  return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
+}
+
+rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+HesaiRosWrapper::on_deactivate(const rclcpp_lifecycle::State &)
+{
+  RCLCPP_INFO(get_logger(), "Deactivating HesaiRosWrapper");
+
+  if (launch_hw_) {
+    hw_interface_wrapper_->hw_interface()->deregister_scan_callback();
+  } else {
+    packets_sub_.reset();
+  }
+
+  return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
+}
+
+rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+HesaiRosWrapper::on_cleanup(const rclcpp_lifecycle::State &)
+{
+  RCLCPP_INFO(get_logger(), "Cleaning up HesaiRosWrapper");
+
+  hw_interface_wrapper_.reset();
+  hw_monitor_wrapper_.reset();
+  decoder_wrapper_.reset();
+
+  return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
+}
+
+rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+HesaiRosWrapper::on_shutdown(const rclcpp_lifecycle::State &)
+{
+  RCLCPP_INFO(get_logger(), "Shutting down HesaiRosWrapper");
+  return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
 }
 
 nebula::Status HesaiRosWrapper::declare_and_get_sensor_config_params()
 {
   nebula::drivers::HesaiSensorConfiguration config;
 
-  auto _sensor_model = declare_parameter<std::string>("sensor_model", param_read_only());
+  auto _sensor_model = get_parameter("sensor_model").as_string();
   config.sensor_model = drivers::sensor_model_from_string(_sensor_model);
 
-  auto _return_mode = declare_parameter<std::string>("return_mode", param_read_write());
+  auto _return_mode = get_parameter("return_mode").as_string();
   config.return_mode = drivers::return_mode_from_string_hesai(_return_mode, config.sensor_model);
 
-  config.host_ip = declare_parameter<std::string>("host_ip", param_read_only());
-  config.sensor_ip = declare_parameter<std::string>("sensor_ip", param_read_only());
-  config.multicast_ip = declare_parameter<std::string>("multicast_ip", param_read_only());
-  config.data_port = declare_parameter<uint16_t>("data_port", param_read_only());
-  config.gnss_port = declare_parameter<uint16_t>("gnss_port", param_read_only());
-  config.frame_id = declare_parameter<std::string>("frame_id", param_read_write());
-
-  {
-    rcl_interfaces::msg::ParameterDescriptor descriptor = param_read_write();
-    descriptor.floating_point_range = float_range(0, 360, 0.01);
-    descriptor.description =
-      "Angle at which to cut the scan. Cannot be equal to the start angle in a non-360 deg "
-      "FoV. Choose the end angle instead.";
-    config.cut_angle = declare_parameter<double>("cut_angle", descriptor);
-  }
+  config.host_ip = get_parameter("host_ip").as_string();
+  config.sensor_ip = get_parameter("sensor_ip").as_string();
+  config.multicast_ip = get_parameter("multicast_ip").as_string();
+  config.data_port = get_parameter("data_port").as_int();
+  config.gnss_port = get_parameter("gnss_port").as_int();
+  config.frame_id = get_parameter("frame_id").as_string();
+  config.cut_angle = get_parameter("cut_angle").as_double();
 
   {
     rcl_interfaces::msg::ParameterDescriptor descriptor = param_read_write();
@@ -136,19 +229,29 @@ nebula::Status HesaiRosWrapper::declare_and_get_sensor_config_params()
     } else {
       descriptor.integer_range = int_range(0, 359, 1);
     }
-    config.sync_angle = declare_parameter<uint16_t>("sync_angle", descriptor);
+    if (this->has_parameter("sync_angle")) {
+      config.sync_angle = get_parameter("sync_angle").as_int();
+    } else {
+      config.sync_angle = declare_parameter<uint16_t>("sync_angle", descriptor);
+    }
   }
+  RCLCPP_INFO(this->get_logger(), "Here 2");
 
-  config.min_range = declare_parameter<double>("min_range", param_read_write());
-  config.max_range = declare_parameter<double>("max_range", param_read_write());
-  config.packet_mtu_size = declare_parameter<uint16_t>("packet_mtu_size", param_read_only());
+  config.min_range = get_parameter("min_range").as_double();
+  config.max_range = get_parameter("max_range").as_double();
+  config.packet_mtu_size = get_parameter("packet_mtu_size").as_int();
 
   config.hires_mode = false;
   if (
     config.sensor_model == drivers::SensorModel::HESAI_PANDAR128_E4X ||
     config.sensor_model == drivers::SensorModel::HESAI_PANDAR128_E3X) {
-    config.hires_mode = this->declare_parameter<bool>("hires_mode", param_read_write());
+    if (this->has_parameter("hires_mode")) {
+      config.hires_mode = get_parameter("hires_mode").as_bool();
+    } else {
+      config.hires_mode = declare_parameter<bool>("hires_mode", param_read_write());
+    }
   }
+  RCLCPP_INFO(this->get_logger(), "Here 3");
 
   {
     rcl_interfaces::msg::ParameterDescriptor descriptor = param_read_write();
@@ -160,34 +263,32 @@ nebula::Status HesaiRosWrapper::declare_and_get_sensor_config_params()
       descriptor.additional_constraints = "300, 600, 1200";
       descriptor.integer_range = int_range(300, 1200, 300);
     }
-    config.rotation_speed = declare_parameter<uint16_t>("rotation_speed", descriptor);
+    if (this->has_parameter("rotation_speed")) {
+      config.rotation_speed = get_parameter("rotation_speed").as_int();
+    } else {
+      config.rotation_speed = declare_parameter<uint16_t>("rotation_speed", descriptor);
+    }
   }
-  {
-    rcl_interfaces::msg::ParameterDescriptor descriptor = param_read_write();
-    descriptor.integer_range = int_range(0, 360, 1);
-    config.cloud_min_angle = declare_parameter<uint16_t>("cloud_min_angle", descriptor);
-  }
-  {
-    rcl_interfaces::msg::ParameterDescriptor descriptor = param_read_write();
-    descriptor.integer_range = int_range(0, 360, 1);
-    config.cloud_max_angle = declare_parameter<uint16_t>("cloud_max_angle", descriptor);
-  }
-  {
-    rcl_interfaces::msg::ParameterDescriptor descriptor = param_read_write();
-    descriptor.additional_constraints = "Dual return distance threshold [0.01, 0.5]";
-    descriptor.floating_point_range = float_range(0.01, 0.5, 0.01);
-    config.dual_return_distance_threshold =
-      declare_parameter<double>("dual_return_distance_threshold", descriptor);
-  }
+  RCLCPP_INFO(this->get_logger(), "Here 4");
+
+  config.cloud_min_angle = get_parameter("cloud_min_angle").as_int();
+  config.cloud_max_angle = get_parameter("cloud_max_angle").as_int();
+  config.dual_return_distance_threshold =
+    get_parameter("dual_return_distance_threshold").as_double();
 
   std::string calibration_parameter_name = get_calibration_parameter_name(config.sensor_model);
-  config.calibration_path =
-    declare_parameter<std::string>(calibration_parameter_name, param_read_write());
+  if (this->has_parameter(calibration_parameter_name)) {
+    config.calibration_path = get_parameter(calibration_parameter_name).as_string();
+  } else {
+    config.calibration_path =
+      declare_parameter<std::string>(calibration_parameter_name, param_read_write());
+  }
+  RCLCPP_INFO(this->get_logger(), "Here 5");
 
-  auto ptp_profile = declare_parameter<std::string>("ptp_profile", param_read_only());
+  auto ptp_profile = get_parameter("ptp_profile").as_string();
   config.ptp_profile = drivers::ptp_profile_from_string(ptp_profile);
 
-  auto ptp_transport = declare_parameter<std::string>("ptp_transport_type", param_read_only());
+  auto ptp_transport = get_parameter("ptp_transport_type").as_string();
   config.ptp_transport_type = drivers::ptp_transport_type_from_string(ptp_transport);
 
   if (
@@ -202,23 +303,13 @@ nebula::Status HesaiRosWrapper::declare_and_get_sensor_config_params()
     set_parameter(rclcpp::Parameter("ptp_transport_type", "L2"));
   }
 
-  auto ptp_switch = declare_parameter<std::string>("ptp_switch_type", param_read_only());
+  auto ptp_switch = get_parameter("ptp_switch_type").as_string();
   config.ptp_switch_type = drivers::ptp_switch_type_from_string(ptp_switch);
+  config.ptp_domain = get_parameter("ptp_domain").as_int();
+  config.ptp_lock_threshold = get_parameter("ptp_lock_threshold").as_int();
 
   {
-    rcl_interfaces::msg::ParameterDescriptor descriptor = param_read_only();
-    descriptor.integer_range = int_range(0, 127, 1);
-    config.ptp_domain = declare_parameter<uint8_t>("ptp_domain", descriptor);
-  }
-  {
-    rcl_interfaces::msg::ParameterDescriptor descriptor = param_read_only();
-    descriptor.integer_range = int_range(1, 100, 1);
-    config.ptp_lock_threshold = declare_parameter<uint8_t>("ptp_lock_threshold", descriptor);
-  }
-
-  {
-    auto downsample_mask_path =
-      declare_parameter<std::string>("point_filters.downsample_mask.path", "", param_read_write());
+    auto downsample_mask_path = get_parameter("point_filters.downsample_mask.path").as_string();
     if (downsample_mask_path.empty()) {
       config.downsample_mask_path = std::nullopt;
     } else {

@@ -79,6 +79,15 @@ Status ContinentalARS548HwInterface::register_packet_callback(
   return Status::OK;
 }
 
+void ContinentalARS548HwInterface::deregister_packet_callback()
+{
+  // Close UDP socket first and then reset callback.
+  if (sensor_udp_driver_ptr_->receiver()->isOpen()) {
+    sensor_udp_driver_ptr_->receiver()->close();
+  }
+  packet_callback_ = nullptr;
+}
+
 void ContinentalARS548HwInterface::receive_sensor_packet_callback_with_sender(
   std::vector<uint8_t> & buffer, const std::string & sender_ip)
 {

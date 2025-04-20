@@ -11,7 +11,7 @@
 namespace nebula::ros
 {
 RobosenseHwInterfaceWrapper::RobosenseHwInterfaceWrapper(
-  rclcpp::Node * const parent_node,
+  rclcpp_lifecycle::LifecycleNode * const parent_node,
   std::shared_ptr<const nebula::drivers::RobosenseSensorConfiguration> & config)
 : hw_interface_(
     std::make_shared<drivers::RobosenseHwInterface>(

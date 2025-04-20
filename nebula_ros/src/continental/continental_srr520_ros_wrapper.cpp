@@ -27,12 +27,27 @@
 namespace nebula::ros
 {
 ContinentalSRR520RosWrapper::ContinentalSRR520RosWrapper(const rclcpp::NodeOptions & options)
-: rclcpp::Node(
+: rclcpp_lifecycle::LifecycleNode(
     "continental_srr520_ros_wrapper", rclcpp::NodeOptions(options).use_intra_process_comms(true)),
   wrapper_status_(Status::NOT_INITIALIZED)
 {
   setvbuf(stdout, NULL, _IONBF, BUFSIZ);
 
+  declare_parameter<std::string>("sensor_model", param_read_only());
+  declare_parameter<std::string>("interface", param_read_only());
+  declare_parameter<double>("receiver_timeout_sec", param_read_only());
+  declare_parameter<double>("sender_timeout_sec", param_read_only());
+  declare_parameter<std::string>("filters", param_read_only());
+  declare_parameter<std::string>("frame_id", param_read_write());
+  declare_parameter<std::string>("base_frame", param_read_write());
+  declare_parameter<bool>("use_bus_time", param_read_only());
+  declare_parameter<double>("configuration_vehicle_wheelbase", param_read_only());
+  declare_parameter<bool>("launch_hw", param_read_only());
+}
+
+rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+ContinentalSRR520RosWrapper::on_configure(const rclcpp_lifecycle::State &)
+{
   wrapper_status_ = declare_and_get_sensor_config_params();
 
   if (wrapper_status_ != Status::OK) {
@@ -41,7 +56,7 @@ ContinentalSRR520RosWrapper::ContinentalSRR520RosWrapper(const rclcpp::NodeOptio
 
   RCLCPP_INFO_STREAM(get_logger(), "Sensor Configuration: " << *config_ptr_);
 
-  launch_hw_ = declare_parameter<bool>("launch_hw", param_read_only());
+  launch_hw_ = get_parameter("launch_hw").as_bool();
 
   if (launch_hw_) {
     hw_interface_wrapper_.emplace(this, config_ptr_);
@@ -50,7 +65,19 @@ ContinentalSRR520RosWrapper::ContinentalSRR520RosWrapper(const rclcpp::NodeOptio
     decoder_wrapper_.emplace(this, config_ptr_, nullptr);
   }
 
+  // Register parameter callback after all params have been declared. Otherwise it would be called
+  // once for each declaration
+  parameter_event_cb_ = add_on_set_parameters_callback(
+    std::bind(&ContinentalSRR520RosWrapper::on_parameter_change, this, std::placeholders::_1));
+
+  return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
+}
+
+rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+ContinentalSRR520RosWrapper::on_activate(const rclcpp_lifecycle::State &)
+{
   RCLCPP_DEBUG(get_logger(), "Starting stream");
+  RCLCPP_INFO(get_logger(), "Activating ContinentalSRR520RosWrapper");
 
   if (launch_hw_) {
     hw_interface_wrapper_->hw_interface()->register_packet_callback(
@@ -67,29 +94,57 @@ ContinentalSRR520RosWrapper::ContinentalSRR520RosWrapper(const rclcpp::NodeOptio
       "Hardware connection disabled, listening for packets on " << packets_sub_->get_topic_name());
   }
 
-  // Register parameter callback after all params have been declared. Otherwise it would be called
-  // once for each declaration
-  parameter_event_cb_ = add_on_set_parameters_callback(
-    std::bind(&ContinentalSRR520RosWrapper::on_parameter_change, this, std::placeholders::_1));
+  return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
+}
+
+rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+ContinentalSRR520RosWrapper::on_deactivate(const rclcpp_lifecycle::State &)
+{
+  RCLCPP_INFO(get_logger(), "Deactivating ContinentalSRR520RosWrapper");
+
+  if (launch_hw_) {
+    hw_interface_wrapper_->hw_interface()->deregister_packet_callback();
+  } else {
+    packets_sub_.reset();
+  }
+
+  return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
+}
+
+rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+ContinentalSRR520RosWrapper::on_cleanup(const rclcpp_lifecycle::State &)
+{
+  RCLCPP_INFO(get_logger(), "Cleaning up ContinentalSRR520RosWrapper");
+
+  hw_interface_wrapper_.reset();
+  decoder_wrapper_.reset();
+
+  return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
+}
+
+rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+ContinentalSRR520RosWrapper::on_shutdown(const rclcpp_lifecycle::State &)
+{
+  RCLCPP_INFO(get_logger(), "Shutting down ContinentalSRR520RosWrapper");
+  return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
 }
 
 nebula::Status ContinentalSRR520RosWrapper::declare_and_get_sensor_config_params()
 {
   nebula::drivers::continental_srr520::ContinentalSRR520SensorConfiguration config;
 
-  config.sensor_model = nebula::drivers::sensor_model_from_string(
-    declare_parameter<std::string>("sensor_model", param_read_only()));
-  config.interface = declare_parameter<std::string>("interface", param_read_only());
+  config.sensor_model =
+    nebula::drivers::sensor_model_from_string(get_parameter("sensor_model").as_string());
+  config.interface = get_parameter("interface").as_string();
   config.receiver_timeout_sec =
-    static_cast<float>(declare_parameter<double>("receiver_timeout_sec", param_read_only()));
-  config.sender_timeout_sec =
-    static_cast<float>(declare_parameter<double>("sender_timeout_sec", param_read_only()));
-  config.filters = declare_parameter<std::string>("filters", param_read_only());
-  config.frame_id = declare_parameter<std::string>("frame_id", param_read_write());
-  config.base_frame = declare_parameter<std::string>("base_frame", param_read_write());
+    static_cast<float>(get_parameter("receiver_timeout_sec").as_double());
+  config.sender_timeout_sec = static_cast<float>(get_parameter("sender_timeout_sec").as_double());
+  config.filters = get_parameter("filters").as_string();
+  config.frame_id = get_parameter("frame_id").as_string();
+  config.base_frame = get_parameter("base_frame").as_string();
   config.use_bus_time = declare_parameter<bool>("use_bus_time", param_read_only());
-  config.configuration_vehicle_wheelbase = static_cast<float>(
-    declare_parameter<double>("configuration_vehicle_wheelbase", param_read_only()));
+  config.configuration_vehicle_wheelbase =
+    static_cast<float>(get_parameter("configuration_vehicle_wheelbase").as_double());
 
   if (config.sensor_model == nebula::drivers::SensorModel::UNKNOWN) {
     return Status::INVALID_SENSOR_MODEL;

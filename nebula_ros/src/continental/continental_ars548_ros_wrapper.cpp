@@ -27,12 +27,33 @@
 namespace nebula::ros
 {
 ContinentalARS548RosWrapper::ContinentalARS548RosWrapper(const rclcpp::NodeOptions & options)
-: rclcpp::Node(
+: rclcpp_lifecycle::LifecycleNode(
     "continental_ars548_ros_wrapper", rclcpp::NodeOptions(options).use_intra_process_comms(true)),
   wrapper_status_(Status::NOT_INITIALIZED)
 {
   setvbuf(stdout, NULL, _IONBF, BUFSIZ);
 
+  declare_parameter<std::string>("sensor_model", param_read_only());
+  declare_parameter<std::string>("host_ip", param_read_only());
+  declare_parameter<std::string>("sensor_ip", param_read_only());
+  declare_parameter<std::string>("multicast_ip", param_read_only());
+  declare_parameter<std::string>("frame_id", param_read_write());
+  declare_parameter<std::string>("base_frame", param_read_write());
+  declare_parameter<std::string>("object_frame", param_read_write());
+  declare_parameter<uint16_t>("data_port", param_read_only());
+  declare_parameter<uint16_t>("configuration_host_port", param_read_only());
+  declare_parameter<uint16_t>("configuration_sensor_port", param_read_only());
+  declare_parameter<bool>("use_sensor_time", param_read_write());
+  declare_parameter<double>("configuration_vehicle_length", param_read_write());
+  declare_parameter<double>("configuration_vehicle_width", param_read_write());
+  declare_parameter<double>("configuration_vehicle_height", param_read_write());
+  declare_parameter<double>("configuration_vehicle_wheelbase", param_read_write());
+  declare_parameter<bool>("launch_hw", param_read_only());
+}
+
+rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+ContinentalARS548RosWrapper::on_configure(const rclcpp_lifecycle::State &)
+{
   wrapper_status_ = declare_and_get_sensor_config_params();
 
   if (wrapper_status_ != Status::OK) {
@@ -41,7 +62,7 @@ ContinentalARS548RosWrapper::ContinentalARS548RosWrapper(const rclcpp::NodeOptio
 
   RCLCPP_INFO_STREAM(get_logger(), "Sensor Configuration: " << *config_ptr_);
 
-  launch_hw_ = declare_parameter<bool>("launch_hw", param_read_only());
+  launch_hw_ = get_parameter("launch_hw").as_bool();
 
   if (launch_hw_) {
     hw_interface_wrapper_.emplace(this, config_ptr_);
@@ -49,7 +70,19 @@ ContinentalARS548RosWrapper::ContinentalARS548RosWrapper(const rclcpp::NodeOptio
 
   decoder_wrapper_.emplace(this, config_ptr_, launch_hw_);
 
+  // Register parameter callback after all params have been declared. Otherwise it would be called
+  // once for each declaration
+  parameter_event_cb_ = add_on_set_parameters_callback(
+    std::bind(&ContinentalARS548RosWrapper::on_parameter_change, this, std::placeholders::_1));
+
+  return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
+}
+
+rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+ContinentalARS548RosWrapper::on_activate(const rclcpp_lifecycle::State &)
+{
   RCLCPP_DEBUG(get_logger(), "Starting stream");
+  RCLCPP_INFO(get_logger(), "Activating ContinentalARS548RosWrapper");
 
   if (launch_hw_) {
     hw_interface_wrapper_->hw_interface()->register_packet_callback(
@@ -66,38 +99,65 @@ ContinentalARS548RosWrapper::ContinentalARS548RosWrapper(const rclcpp::NodeOptio
       "Hardware connection disabled, listening for packets on " << packets_sub_->get_topic_name());
   }
 
-  // Register parameter callback after all params have been declared. Otherwise it would be called
-  // once for each declaration
-  parameter_event_cb_ = add_on_set_parameters_callback(
-    std::bind(&ContinentalARS548RosWrapper::on_parameter_change, this, std::placeholders::_1));
+  return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
+}
+
+rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+ContinentalARS548RosWrapper::on_deactivate(const rclcpp_lifecycle::State &)
+{
+  RCLCPP_INFO(get_logger(), "Deactivating ContinentalARS548RosWrapper");
+
+  if (launch_hw_) {
+    hw_interface_wrapper_->hw_interface()->deregister_packet_callback();
+  } else {
+    packets_sub_.reset();
+  }
+
+  return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
+}
+
+rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+ContinentalARS548RosWrapper::on_cleanup(const rclcpp_lifecycle::State &)
+{
+  RCLCPP_INFO(get_logger(), "Cleaning up ContinentalARS548RosWrapper");
+
+  hw_interface_wrapper_.reset();
+  decoder_wrapper_.reset();
+
+  return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
+}
+
+rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+ContinentalARS548RosWrapper::on_shutdown(const rclcpp_lifecycle::State &)
+{
+  RCLCPP_INFO(get_logger(), "Shutting down ContinentalARS548RosWrapper");
+  return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
 }
 
 nebula::Status ContinentalARS548RosWrapper::declare_and_get_sensor_config_params()
 {
   nebula::drivers::continental_ars548::ContinentalARS548SensorConfiguration config;
 
-  config.sensor_model = nebula::drivers::sensor_model_from_string(
-    declare_parameter<std::string>("sensor_model", param_read_only()));
-  config.host_ip = declare_parameter<std::string>("host_ip", param_read_only());
-  config.sensor_ip = declare_parameter<std::string>("sensor_ip", param_read_only());
-  config.multicast_ip = declare_parameter<std::string>("multicast_ip", param_read_only());
-  config.frame_id = declare_parameter<std::string>("frame_id", param_read_write());
-  config.base_frame = declare_parameter<std::string>("base_frame", param_read_write());
-  config.object_frame = declare_parameter<std::string>("object_frame", param_read_write());
-  config.data_port = static_cast<uint16_t>(declare_parameter<int>("data_port", param_read_only()));
-  config.configuration_host_port =
-    static_cast<uint16_t>(declare_parameter<int>("configuration_host_port", param_read_only()));
-  config.configuration_sensor_port =
-    static_cast<uint16_t>(declare_parameter<int>("configuration_sensor_port", param_read_only()));
-  config.use_sensor_time = declare_parameter<bool>("use_sensor_time", param_read_write());
-  config.configuration_vehicle_length = static_cast<float>(
-    declare_parameter<double>("configuration_vehicle_length", param_read_write()));
-  config.configuration_vehicle_width = static_cast<float>(
-    declare_parameter<double>("configuration_vehicle_width", param_read_write()));
-  config.configuration_vehicle_height = static_cast<float>(
-    declare_parameter<double>("configuration_vehicle_height", param_read_write()));
-  config.configuration_vehicle_wheelbase = static_cast<float>(
-    declare_parameter<double>("configuration_vehicle_wheelbase", param_read_write()));
+  config.sensor_model =
+    nebula::drivers::sensor_model_from_string(get_parameter("sensor_model").as_string());
+  config.host_ip = get_parameter("host_ip").as_string();
+  config.sensor_ip = get_parameter("sensor_ip").as_string();
+  config.multicast_ip = get_parameter("multicast_ip").as_string();
+  config.frame_id = get_parameter("frame_id").as_string();
+  config.base_frame = get_parameter("base_frame").as_string();
+  config.object_frame = get_parameter("object_frame").as_string();
+  config.data_port = get_parameter("data_port").as_int();
+  config.configuration_host_port = get_parameter("configuration_host_port").as_int();
+  config.configuration_sensor_port = get_parameter("configuration_sensor_port").as_int();
+  config.use_sensor_time = get_parameter("use_sensor_time").as_bool();
+  config.configuration_vehicle_length =
+    static_cast<float>(get_parameter("configuration_vehicle_length").as_double());
+  config.configuration_vehicle_width =
+    static_cast<float>(get_parameter("configuration_vehicle_width").as_double());
+  config.configuration_vehicle_height =
+    static_cast<float>(get_parameter("configuration_vehicle_height").as_double());
+  config.configuration_vehicle_wheelbase =
+    static_cast<float>(get_parameter("configuration_vehicle_wheelbase").as_double());
 
   if (config.sensor_model == nebula::drivers::SensorModel::UNKNOWN) {
     return Status::INVALID_SENSOR_MODEL;

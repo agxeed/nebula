@@ -16,7 +16,7 @@
 
 #include <nebula_common/hesai/hesai_common.hpp>
 #include <nebula_hw_interfaces/nebula_hw_interfaces_hesai/hesai_hw_interface.hpp>
-#include <rclcpp/rclcpp.hpp>
+#include <rclcpp_lifecycle/lifecycle_node.hpp>
 
 #include <memory>
 
@@ -26,7 +26,7 @@ class HesaiHwInterfaceWrapper
 {
 public:
   HesaiHwInterfaceWrapper(
-    rclcpp::Node * const parent_node,
+    rclcpp_lifecycle::LifecycleNode * const parent_node,
     std::shared_ptr<const nebula::drivers::HesaiSensorConfiguration> & config,
     bool use_udp_only = false);
 

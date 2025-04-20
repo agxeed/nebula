@@ -14,7 +14,7 @@ namespace nebula::ros
 using namespace std::chrono_literals;  // NOLINT(build/namespaces)
 
 RobosenseDecoderWrapper::RobosenseDecoderWrapper(
-  rclcpp::Node * const parent_node,
+  rclcpp_lifecycle::LifecycleNode * const parent_node,
   const std::shared_ptr<nebula::drivers::RobosenseHwInterface> & hw_interface,
   const std::shared_ptr<const nebula::drivers::RobosenseSensorConfiguration> & config,
   const std::shared_ptr<const nebula::drivers::RobosenseCalibrationConfiguration> & calibration)

@@ -56,6 +56,9 @@ public:
   Status register_packet_callback(
     std::function<void(std::unique_ptr<nebula_msgs::msg::NebulaPacket>)> packet_callback);
 
+  /// @brief De-registering callback
+  void deregister_packet_callback();
+
   /// @brief Set the sensor mounting parameters
   /// @param longitudinal_autosar Desired longitudinal value in autosar coordinates
   /// @param lateral_autosar Desired lateral value in autosar coordinates

@@ -224,6 +224,8 @@ public:
   /// @param scan_callback Callback function
   /// @return Resulting status
   Status register_scan_callback(std::function<void(const std::vector<uint8_t> &)> scan_callback);
+  /// @brief De-registering callback for PandarScan
+  void deregister_scan_callback();
   /// @brief Getting data with PTC_COMMAND_GET_LIDAR_CALIBRATION
   /// @return Resulting status
   std::string get_lidar_calibration_string();

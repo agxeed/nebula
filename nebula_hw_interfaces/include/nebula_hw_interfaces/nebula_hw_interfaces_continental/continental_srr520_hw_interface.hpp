@@ -62,6 +62,9 @@ public:
   Status register_packet_callback(
     std::function<void(std::unique_ptr<nebula_msgs::msg::NebulaPacket>)> packet_callback);
 
+  /// @brief De-registering callback
+  void deregister_packet_callback();
+
   /// @brief Sensor synchronization routine
   void sensor_sync();
 

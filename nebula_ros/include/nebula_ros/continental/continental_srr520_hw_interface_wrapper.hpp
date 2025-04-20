@@ -18,7 +18,7 @@
 
 #include <nebula_common/continental/continental_srr520.hpp>
 #include <nebula_hw_interfaces/nebula_hw_interfaces_continental/continental_srr520_hw_interface.hpp>
-#include <rclcpp/rclcpp.hpp>
+#include <rclcpp_lifecycle/lifecycle_node.hpp>
 
 #include <continental_srvs/srv/continental_srr520_set_radar_parameters.hpp>
 #include <geometry_msgs/msg/accel_with_covariance_stamped.hpp>
@@ -36,7 +36,7 @@ class ContinentalSRR520HwInterfaceWrapper
 {
 public:
   ContinentalSRR520HwInterfaceWrapper(
-    rclcpp::Node * const parent_node,
+    rclcpp_lifecycle::LifecycleNode * const parent_node,
     std::shared_ptr<const drivers::continental_srr520::ContinentalSRR520SensorConfiguration> &
       config);
 
@@ -73,15 +73,19 @@ private:
   /// @brief Method periodically called to initiate the sensor synchronization mechanism
   void sync_timer_callback();
 
-  rclcpp::Node * const parent_node_;
+  rclcpp_lifecycle::LifecycleNode * const parent_node_;
   std::shared_ptr<drivers::continental_srr520::ContinentalSRR520HwInterface> hw_interface_{};
   rclcpp::Logger logger_;
   nebula::Status status_{};
   std::shared_ptr<const nebula::drivers::continental_srr520::ContinentalSRR520SensorConfiguration>
     config_ptr_{};
 
-  message_filters::Subscriber<geometry_msgs::msg::TwistWithCovarianceStamped> odometry_sub_;
-  message_filters::Subscriber<geometry_msgs::msg::AccelWithCovarianceStamped> acceleration_sub_;
+  message_filters::Subscriber<
+    geometry_msgs::msg::TwistWithCovarianceStamped, rclcpp_lifecycle::LifecycleNode>
+    odometry_sub_;
+  message_filters::Subscriber<
+    geometry_msgs::msg::AccelWithCovarianceStamped, rclcpp_lifecycle::LifecycleNode>
+    acceleration_sub_;
 
   using ExactTimeSyncPolicy = message_filters::sync_policies::ExactTime<
     geometry_msgs::msg::TwistWithCovarianceStamped, geometry_msgs::msg::AccelWithCovarianceStamped>;

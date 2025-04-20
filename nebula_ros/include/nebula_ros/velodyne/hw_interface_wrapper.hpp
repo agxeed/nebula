@@ -18,7 +18,7 @@
 
 #include <nebula_common/velodyne/velodyne_common.hpp>
 #include <nebula_hw_interfaces/nebula_hw_interfaces_velodyne/velodyne_hw_interface.hpp>
-#include <rclcpp/rclcpp.hpp>
+#include <rclcpp_lifecycle/lifecycle_node.hpp>
 
 #include <memory>
 
@@ -28,7 +28,7 @@ class VelodyneHwInterfaceWrapper
 {
 public:
   VelodyneHwInterfaceWrapper(
-    rclcpp::Node * const parent_node,
+    rclcpp_lifecycle::LifecycleNode * const parent_node,
     std::shared_ptr<const nebula::drivers::VelodyneSensorConfiguration> & config,
     bool use_udp_only = false);
 

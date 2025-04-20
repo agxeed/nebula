@@ -87,6 +87,9 @@ public:
   /// @return Resulting status
   Status register_scan_callback(std::function<void(std::vector<uint8_t> &)> scan_callback);
 
+  /// @brief De-registering callback for RobosenseScan
+  void deregister_scan_callback();
+
   /// @brief Registering callback for RobosensePacket
   /// @param scan_callback Callback function
   /// @return Resulting status

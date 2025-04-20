@@ -37,18 +37,21 @@ void HesaiHwMonitorWrapper::add_json_item_to_diagnostics(
 }
 
 HesaiHwMonitorWrapper::HesaiHwMonitorWrapper(
-  rclcpp::Node * const parent_node,
+  rclcpp_lifecycle::LifecycleNode * const parent_node,
   const std::shared_ptr<nebula::drivers::HesaiHwInterface> & hw_interface,
   std::shared_ptr<const nebula::drivers::HesaiSensorConfiguration> & config)
 : logger_(parent_node->get_logger().get_child("HwMonitor")),
   diagnostics_updater_(
-    (parent_node->declare_parameter<bool>("diagnostic_updater.use_fqn", true), parent_node)),
+    (parent_node->get_parameter("diagnostic_updater.use_fqn").as_bool(), parent_node)),
   status_(Status::OK),
   hw_interface_(hw_interface),
   parent_node_(parent_node)
 {
-  diag_span_ = parent_node->declare_parameter<uint16_t>("diag_span", param_read_only());
-
+  if (parent_node->has_parameter("diag_span")) {
+    diag_span_ = parent_node->get_parameter("diag_span").as_int();
+  } else {
+    diag_span_ = parent_node->declare_parameter<int>("diag_span", param_read_only());
+  }
   bool monitor_enabled = config->sensor_model != drivers::SensorModel::HESAI_PANDARAT128 &&
                          config->sensor_model != drivers::SensorModel::HESAI_PANDAR40P &&
                          config->sensor_model != drivers::SensorModel::HESAI_PANDAR64;

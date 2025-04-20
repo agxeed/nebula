@@ -26,8 +26,8 @@
   <depend>nebula_msgs</depend>
   <depend>pandar_msgs</depend>
   <depend>radar_msgs</depend>
-  <depend>rclcpp</depend>
   <depend>rclcpp_components</depend>
+  <depend>rclcpp_lifecycle</depend>
   <depend>robosense_msgs</depend>
   <depend>tf2_ros</depend>
   <depend>velodyne_msgs</depend>

@@ -19,7 +19,7 @@
 #include <diagnostic_updater/diagnostic_updater.hpp>
 #include <nebula_common/velodyne/velodyne_common.hpp>
 #include <nebula_hw_interfaces/nebula_hw_interfaces_velodyne/velodyne_hw_interface.hpp>
-#include <rclcpp/rclcpp.hpp>
+#include <rclcpp_lifecycle/lifecycle_node.hpp>
 
 #include <boost/algorithm/string/join.hpp>
 #include <boost/asio.hpp>
@@ -37,7 +37,7 @@ class VelodyneHwMonitorWrapper
 {
 public:
   VelodyneHwMonitorWrapper(
-    rclcpp::Node * const parent_node,
+    rclcpp_lifecycle::LifecycleNode * const parent_node,
     const std::shared_ptr<nebula::drivers::VelodyneHwInterface> & hw_interface,
     std::shared_ptr<const nebula::drivers::VelodyneSensorConfiguration> & config);
 
@@ -267,7 +267,7 @@ private:
   diagnostic_updater::Updater diagnostics_updater_;
 
   const std::shared_ptr<nebula::drivers::VelodyneHwInterface> hw_interface_;
-  rclcpp::Node * const parent_node_;
+  rclcpp_lifecycle::LifecycleNode * const parent_node_;
 
   std::shared_ptr<const nebula::drivers::VelodyneSensorConfiguration> sensor_configuration_;
 

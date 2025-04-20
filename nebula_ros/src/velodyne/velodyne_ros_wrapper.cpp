@@ -16,22 +16,65 @@
 namespace nebula::ros
 {
 VelodyneRosWrapper::VelodyneRosWrapper(const rclcpp::NodeOptions & options)
-: rclcpp::Node("velodyne_ros_wrapper", rclcpp::NodeOptions(options).use_intra_process_comms(true)),
+: rclcpp_lifecycle::LifecycleNode(
+    "velodyne_ros_wrapper", rclcpp::NodeOptions(options).use_intra_process_comms(true)),
   wrapper_status_(Status::NOT_INITIALIZED),
   sensor_cfg_ptr_(nullptr)
 {
   setvbuf(stdout, NULL, _IONBF, BUFSIZ);
 
+  // Declare parameters here to make them available before lifecycle transitions
+  declare_parameter<bool>("launch_hw", param_read_only());
+  declare_parameter<bool>("udp_only", param_read_only());
+  declare_parameter<std::string>("sensor_model", param_read_only());
+  declare_parameter<std::string>("return_mode", param_read_write());
+  declare_parameter<std::string>("host_ip", param_read_only());
+  declare_parameter<std::string>("sensor_ip", param_read_only());
+  declare_parameter<uint16_t>("data_port", param_read_only());
+  declare_parameter<uint16_t>("gnss_port", param_read_only());
+  declare_parameter<std::string>("frame_id", param_read_write());
+  {
+    rcl_interfaces::msg::ParameterDescriptor descriptor = param_read_write();
+    descriptor.additional_constraints = "Angle where scans begin (degrees, [0.,360.])";
+    descriptor.floating_point_range = float_range(0, 360, 0.01);
+    declare_parameter<double>("scan_phase", descriptor);
+  }
+  declare_parameter<double>("min_range", param_read_write());
+  declare_parameter<double>("max_range", param_read_write());
+  declare_parameter<uint16_t>("packet_mtu_size", param_read_only());
+  {
+    rcl_interfaces::msg::ParameterDescriptor descriptor = param_read_write();
+    descriptor.additional_constraints = "from 300 to 1200, in increments of 60";
+    descriptor.integer_range = int_range(300, 1200, 60);
+    declare_parameter<uint16_t>("rotation_speed", descriptor);
+  }
+  {
+    rcl_interfaces::msg::ParameterDescriptor descriptor = param_read_write();
+    descriptor.integer_range = int_range(0, 360, 1);
+    declare_parameter<uint16_t>("cloud_min_angle", descriptor);
+  }
+  {
+    rcl_interfaces::msg::ParameterDescriptor descriptor = param_read_write();
+    descriptor.integer_range = int_range(0, 360, 1);
+    declare_parameter<uint16_t>("cloud_max_angle", descriptor);
+  }
+}
+
+rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+VelodyneRosWrapper::on_configure(const rclcpp_lifecycle::State &)
+{
   wrapper_status_ = declare_and_get_sensor_config_params();
 
   if (wrapper_status_ != Status::OK) {
-    throw std::runtime_error("Sensor configuration invalid: " + util::to_string(wrapper_status_));
+    RCLCPP_ERROR(
+      get_logger(), "Sensor configuration invalid: %s", util::to_string(wrapper_status_).c_str());
+    return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::FAILURE;
   }
 
   RCLCPP_INFO_STREAM(get_logger(), "Sensor Configuration: " << *sensor_cfg_ptr_);
 
-  launch_hw_ = declare_parameter<bool>("launch_hw", param_read_only());
-  bool use_udp_only = declare_parameter<bool>("udp_only", param_read_only());
+  launch_hw_ = get_parameter("launch_hw").as_bool();
+  bool use_udp_only = get_parameter("udp_only").as_bool();
 
   if (use_udp_only) {
     RCLCPP_INFO_STREAM(
@@ -42,6 +85,9 @@ VelodyneRosWrapper::VelodyneRosWrapper(const rclcpp::NodeOptions & options)
 
   if (launch_hw_) {
     hw_interface_wrapper_.emplace(this, sensor_cfg_ptr_, use_udp_only);
+    if (!this->has_parameter("diagnostic_updater.use_fqn")) {
+      this->declare_parameter<bool>("diagnostic_updater.use_fqn", true);
+    }
     if (!use_udp_only) {  // hardware monitor requires HTTP connection
       hw_monitor_wrapper_.emplace(this, hw_interface_wrapper_->hw_interface(), sensor_cfg_ptr_);
     }
@@ -50,12 +96,27 @@ VelodyneRosWrapper::VelodyneRosWrapper(const rclcpp::NodeOptions & options)
   decoder_wrapper_.emplace(
     this, hw_interface_wrapper_ ? hw_interface_wrapper_->hw_interface() : nullptr, sensor_cfg_ptr_);
 
-  RCLCPP_DEBUG(get_logger(), "Starting stream");
+  // Register parameter callback after all params have been declared. Otherwise it would be called
+  // once for each declaration
+  parameter_event_cb_ = add_on_set_parameters_callback(
+    std::bind(&VelodyneRosWrapper::on_parameter_change, this, std::placeholders::_1));
+
+  return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
+}
+
+rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+VelodyneRosWrapper::on_activate(const rclcpp_lifecycle::State &)
+{
+  RCLCPP_INFO(get_logger(), "Activating VelodyneRosWrapper");
 
   if (launch_hw_) {
     hw_interface_wrapper_->hw_interface()->register_scan_callback(
       std::bind(&VelodyneRosWrapper::receive_cloud_packet_callback, this, std::placeholders::_1));
-    stream_start();
+    auto status = stream_start();
+    if (status != Status::OK) {
+      RCLCPP_ERROR(get_logger(), "Failed to start stream: %s", util::to_string(status).c_str());
+      return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::FAILURE;
+    }
   } else {
     packets_sub_ = create_subscription<velodyne_msgs::msg::VelodyneScan>(
       "velodyne_packets", rclcpp::SensorDataQoS(),
@@ -65,55 +126,65 @@ VelodyneRosWrapper::VelodyneRosWrapper(const rclcpp::NodeOptions & options)
       "Hardware connection disabled, listening for packets on " << packets_sub_->get_topic_name());
   }
 
-  // Register parameter callback after all params have been declared. Otherwise it would be called
-  // once for each declaration
-  parameter_event_cb_ = add_on_set_parameters_callback(
-    std::bind(&VelodyneRosWrapper::on_parameter_change, this, std::placeholders::_1));
+  return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
+}
+
+rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+VelodyneRosWrapper::on_deactivate(const rclcpp_lifecycle::State &)
+{
+  RCLCPP_INFO(get_logger(), "Deactivating VelodyneRosWrapper");
+
+  if (launch_hw_) {
+    hw_interface_wrapper_->hw_interface()->deregister_scan_callback();
+  } else {
+    packets_sub_.reset();
+  }
+
+  return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
+}
+
+rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+VelodyneRosWrapper::on_cleanup(const rclcpp_lifecycle::State &)
+{
+  RCLCPP_INFO(get_logger(), "Cleaning up VelodyneRosWrapper");
+
+  hw_interface_wrapper_.reset();
+  hw_monitor_wrapper_.reset();
+  decoder_wrapper_.reset();
+
+  return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
+}
+
+rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
+VelodyneRosWrapper::on_shutdown(const rclcpp_lifecycle::State &)
+{
+  RCLCPP_INFO(get_logger(), "Shutting down VelodyneRosWrapper");
+  return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
 }
 
 nebula::Status VelodyneRosWrapper::declare_and_get_sensor_config_params()
 {
   nebula::drivers::VelodyneSensorConfiguration config;
 
-  auto _sensor_model = declare_parameter<std::string>("sensor_model", param_read_only());
+  auto _sensor_model = get_parameter("sensor_model").as_string();
   config.sensor_model = drivers::sensor_model_from_string(_sensor_model);
 
-  auto _return_mode = declare_parameter<std::string>("return_mode", param_read_write());
+  auto _return_mode = get_parameter("return_mode").as_string();
   config.return_mode = drivers::return_mode_from_string(_return_mode);
 
-  config.host_ip = declare_parameter<std::string>("host_ip", param_read_only());
-  config.sensor_ip = declare_parameter<std::string>("sensor_ip", param_read_only());
-  config.data_port = declare_parameter<uint16_t>("data_port", param_read_only());
-  config.gnss_port = declare_parameter<uint16_t>("gnss_port", param_read_only());
-  config.frame_id = declare_parameter<std::string>("frame_id", param_read_write());
+  config.host_ip = get_parameter("host_ip").as_string();
+  config.sensor_ip = get_parameter("sensor_ip").as_string();
+  config.data_port = get_parameter("data_port").as_int();
+  config.gnss_port = get_parameter("gnss_port").as_int();
+  config.frame_id = get_parameter("frame_id").as_string();
+  config.scan_phase = get_parameter("scan_phase").as_double();
 
-  {
-    rcl_interfaces::msg::ParameterDescriptor descriptor = param_read_write();
-    descriptor.additional_constraints = "Angle where scans begin (degrees, [0.,360.])";
-    descriptor.floating_point_range = float_range(0, 360, 0.01);
-    config.scan_phase = declare_parameter<double>("scan_phase", descriptor);
-  }
-
-  config.min_range = declare_parameter<double>("min_range", param_read_write());
-  config.max_range = declare_parameter<double>("max_range", param_read_write());
-  config.packet_mtu_size = declare_parameter<uint16_t>("packet_mtu_size", param_read_only());
-
-  {
-    rcl_interfaces::msg::ParameterDescriptor descriptor = param_read_write();
-    descriptor.additional_constraints = "from 300 to 1200, in increments of 60";
-    descriptor.integer_range = int_range(300, 1200, 60);
-    config.rotation_speed = declare_parameter<uint16_t>("rotation_speed", descriptor);
-  }
-  {
-    rcl_interfaces::msg::ParameterDescriptor descriptor = param_read_write();
-    descriptor.integer_range = int_range(0, 360, 1);
-    config.cloud_min_angle = declare_parameter<uint16_t>("cloud_min_angle", descriptor);
-  }
-  {
-    rcl_interfaces::msg::ParameterDescriptor descriptor = param_read_write();
-    descriptor.integer_range = int_range(0, 360, 1);
-    config.cloud_max_angle = declare_parameter<uint16_t>("cloud_max_angle", descriptor);
-  }
+  config.min_range = get_parameter("min_range").as_double();
+  config.max_range = get_parameter("max_range").as_double();
+  config.packet_mtu_size = get_parameter("packet_mtu_size").as_int();
+  config.rotation_speed = get_parameter("rotation_speed").as_int();
+  config.cloud_min_angle = get_parameter("cloud_min_angle").as_int();
+  config.cloud_max_angle = get_parameter("cloud_max_angle").as_int();
 
   auto new_cfg_ptr = std::make_shared<const nebula::drivers::VelodyneSensorConfiguration>(config);
   return validate_and_set_config(new_cfg_ptr);
