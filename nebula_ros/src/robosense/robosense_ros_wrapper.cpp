@@ -120,11 +120,11 @@ RobosenseRosWrapper::on_deactivate(const rclcpp_lifecycle::State &)
 {
   RCLCPP_INFO(get_logger(), "Deactivating RobosenseRosWrapper");
 
-  // if (launch_hw_) {
-  //   hw_interface_wrapper_->hw_interface()->unregister_scan_callback();
-  // } else {
-  //   packets_sub_.reset();
-  // }
+  if (launch_hw_) {
+    hw_interface_wrapper_->hw_interface()->deregister_scan_callback();
+  } else {
+    packets_sub_.reset();
+  }
 
   return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
 }
@@ -137,7 +137,6 @@ RobosenseRosWrapper::on_cleanup(const rclcpp_lifecycle::State &)
   hw_interface_wrapper_.reset();
   hw_monitor_wrapper_.reset();
   decoder_wrapper_.reset();
-  packets_sub_.reset();
 
   return rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn::SUCCESS;
 }
