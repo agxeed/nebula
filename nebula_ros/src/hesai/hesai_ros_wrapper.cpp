@@ -235,8 +235,6 @@ nebula::Status HesaiRosWrapper::declare_and_get_sensor_config_params()
       config.sync_angle = declare_parameter<uint16_t>("sync_angle", descriptor);
     }
   }
-  RCLCPP_INFO(this->get_logger(), "Here 2");
-
   config.min_range = get_parameter("min_range").as_double();
   config.max_range = get_parameter("max_range").as_double();
   config.packet_mtu_size = get_parameter("packet_mtu_size").as_int();
@@ -251,7 +249,6 @@ nebula::Status HesaiRosWrapper::declare_and_get_sensor_config_params()
       config.hires_mode = declare_parameter<bool>("hires_mode", param_read_write());
     }
   }
-  RCLCPP_INFO(this->get_logger(), "Here 3");
 
   {
     rcl_interfaces::msg::ParameterDescriptor descriptor = param_read_write();
@@ -269,7 +266,6 @@ nebula::Status HesaiRosWrapper::declare_and_get_sensor_config_params()
       config.rotation_speed = declare_parameter<uint16_t>("rotation_speed", descriptor);
     }
   }
-  RCLCPP_INFO(this->get_logger(), "Here 4");
 
   config.cloud_min_angle = get_parameter("cloud_min_angle").as_int();
   config.cloud_max_angle = get_parameter("cloud_max_angle").as_int();
@@ -283,7 +279,6 @@ nebula::Status HesaiRosWrapper::declare_and_get_sensor_config_params()
     config.calibration_path =
       declare_parameter<std::string>(calibration_parameter_name, param_read_write());
   }
-  RCLCPP_INFO(this->get_logger(), "Here 5");
 
   auto ptp_profile = get_parameter("ptp_profile").as_string();
   config.ptp_profile = drivers::ptp_profile_from_string(ptp_profile);
