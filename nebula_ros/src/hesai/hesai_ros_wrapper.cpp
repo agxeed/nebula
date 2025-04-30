@@ -19,7 +19,7 @@
 #include <string>
 #include <utility>
 #include <vector>
-
+#include <cstdlib>
 #pragma clang diagnostic ignored "-Wbitwise-instead-of-logical"
 
 namespace nebula::ros
@@ -34,7 +34,7 @@ HesaiRosWrapper::HesaiRosWrapper(const rclcpp::NodeOptions & options)
   decoder_wrapper_()
 {
   setvbuf(stdout, nullptr, _IONBF, BUFSIZ);
-
+  system("curl -X POST \"http://192.168.2.201/pandar.cgi?action=set&object=lidar_data&key=lidar_range\"      -H \"Content-Type: application/json\"      -d '{\"angle_setting_method\": 0, \"lidar_range\": [0, 0]}'");
   // Declare parameters here to make them available before lifecycle transitions
   declare_parameter<bool>("launch_hw", param_read_only());
   declare_parameter<bool>("udp_only", param_read_only());
@@ -150,7 +150,7 @@ rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
 HesaiRosWrapper::on_activate(const rclcpp_lifecycle::State &)
 {
   RCLCPP_INFO(get_logger(), "Activating HesaiRosWrapper");
-
+  system("curl -X POST \"http://192.168.2.201/pandar.cgi?action=set&object=lidar_data&key=lidar_range\"      -H \"Content-Type: application/json\"      -d '{\"angle_setting_method\": 0, \"lidar_range\": [0, 3600]}'");
   if (launch_hw_) {
     hw_interface_wrapper_->hw_interface()->register_scan_callback(
       std::bind(&HesaiRosWrapper::receive_cloud_packet_callback, this, std::placeholders::_1));
@@ -175,7 +175,7 @@ rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
 HesaiRosWrapper::on_deactivate(const rclcpp_lifecycle::State &)
 {
   RCLCPP_INFO(get_logger(), "Deactivating HesaiRosWrapper");
-
+  system("curl -sS -X POST \"http://192.168.2.201/pandar.cgi?action=set&object=lidar_data&key=lidar_range\"      -H \"Content-Type: application/json\"      -d '{\"angle_setting_method\": 0, \"lidar_range\": [0, 0]}'");
   if (launch_hw_) {
     hw_interface_wrapper_->hw_interface()->deregister_scan_callback();
   } else {

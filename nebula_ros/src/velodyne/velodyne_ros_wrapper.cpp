@@ -10,7 +10,7 @@
 #include <string>
 #include <utility>
 #include <vector>
-
+#include <cstdlib>
 #pragma clang diagnostic ignored "-Wbitwise-instead-of-logical"
 
 namespace nebula::ros
@@ -22,7 +22,7 @@ VelodyneRosWrapper::VelodyneRosWrapper(const rclcpp::NodeOptions & options)
   sensor_cfg_ptr_(nullptr)
 {
   setvbuf(stdout, NULL, _IONBF, BUFSIZ);
-
+  system("curl -sS --data \"laser=off\" http://192.168.1.201/cgi/setting");
   // Declare parameters here to make them available before lifecycle transitions
   declare_parameter<bool>("launch_hw", param_read_only());
   declare_parameter<bool>("udp_only", param_read_only());
@@ -108,7 +108,7 @@ rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
 VelodyneRosWrapper::on_activate(const rclcpp_lifecycle::State &)
 {
   RCLCPP_INFO(get_logger(), "Activating VelodyneRosWrapper");
-
+  system("curl -sS --data \"laser=on\" http://192.168.1.201/cgi/setting");
   if (launch_hw_) {
     hw_interface_wrapper_->hw_interface()->register_scan_callback(
       std::bind(&VelodyneRosWrapper::receive_cloud_packet_callback, this, std::placeholders::_1));
@@ -133,7 +133,7 @@ rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn
 VelodyneRosWrapper::on_deactivate(const rclcpp_lifecycle::State &)
 {
   RCLCPP_INFO(get_logger(), "Deactivating VelodyneRosWrapper");
-
+  system("curl -sS --data \"laser=off\" http://192.168.1.201/cgi/setting");
   if (launch_hw_) {
     hw_interface_wrapper_->hw_interface()->deregister_scan_callback();
   } else {
