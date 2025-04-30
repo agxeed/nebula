@@ -94,9 +94,10 @@ void VelodyneHwInterface::deregister_scan_callback()
       cloud_udp_driver_->receiver()->close();
     }
   }
-  cloud_udp_driver_ = nullptr;
-  http_client_driver_ = nullptr;
-  cloud_packet_callback_ = nullptr;
+  // TODO(mukunda): Requires: https://github.com/tier4/nebula/pull/312
+  // cloud_udp_driver_ = nullptr;
+  // http_client_driver_ = nullptr;
+  // cloud_packet_callback_ = nullptr;
 }
 
 void VelodyneHwInterface::receive_sensor_packet_callback(std::vector<uint8_t> & buffer)
