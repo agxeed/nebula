@@ -261,22 +261,24 @@ Status HesaiRosWrapper::validate_and_set_config(
   if (!drivers::angle_is_between<double>(
         new_config->cloud_min_angle, new_config->cloud_max_angle, new_config->cut_angle)) {
       new_config->cut_angle=new_config->cloud_max_angle;
-      RCLCPP_INFO(get_logger(), "Cannot cut scan outside of the FoV. Changing to min FoV");
+      RCLCPP_WARN(get_logger(), "Cannot cut scan outside of the FoV. Changing to max FoV");
     return Status::OK;
   }
 
   bool fov_is_360 = new_config->cloud_min_angle == 0 && new_config->cloud_max_angle == 360;
   if (!fov_is_360 && new_config->cut_angle == new_config->cloud_min_angle) {
-    RCLCPP_ERROR(
-      get_logger(), "Cannot cut scan right at the start of the FoV. Cut at the end instead.");
-    return Status::SENSOR_CONFIG_ERROR;
+    new_config->cut_angle=new_config->cloud_max_angle;
+    RCLCPP_WARN(
+      get_logger(), "Cannot cut scan right at the start of the FoV. Cutting at the end instead.");
+    return Status::OK;
   }
 
   // Handling cutting at 360deg (as opposed to 0deg) for a full 360deg FoV requires a special case
   // in the cutting logic. Thus, require the user to cut at 0deg.
   if (fov_is_360 && new_config->cut_angle == 360) {
-    RCLCPP_ERROR(get_logger(), "Cannot cut a 360deg FoV at 360deg. Cut at 0deg instead.");
-    return Status::SENSOR_CONFIG_ERROR;
+    new_config->cut_angle=new_config->cloud_min_angle;
+    RCLCPP_WARN(get_logger(), "Cannot cut a 360deg FoV at 360deg. Cutting at 0deg instead.");
+    return Status::OK;
   }
 
   if (
