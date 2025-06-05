@@ -78,7 +78,7 @@ private:
     const std::vector<rclcpp::Parameter> & p);
 
   Status validate_and_set_config(
-    std::shared_ptr<const drivers::HesaiSensorConfiguration> & new_config);
+    std::shared_ptr< drivers::HesaiSensorConfiguration> & new_config);
 
   /// @brief The ROS 2 parameter holding the calibration file path is called differently depending
   /// on the sensor model. This function returns the correct parameter name given a model.

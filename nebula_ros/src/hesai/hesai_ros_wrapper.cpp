@@ -42,7 +42,7 @@ HesaiRosWrapper::HesaiRosWrapper(const rclcpp::NodeOptions & options)
 
   RCLCPP_INFO_STREAM(get_logger(), "Sensor Configuration: " << *sensor_cfg_ptr_);
 
-  launch_hw_ = declare_parameter<bool>("launch_hw", param_read_only());
+  launch_hw_ = declare_parameter<bool>("launch_hw", param_read_write());
   bool use_udp_only = declare_parameter<bool>("udp_only", param_read_only());
 
   if (use_udp_only) {
@@ -219,12 +219,12 @@ nebula::Status HesaiRosWrapper::declare_and_get_sensor_config_params()
     }
   }
 
-  auto new_cfg_ptr = std::make_shared<const nebula::drivers::HesaiSensorConfiguration>(config);
+  auto new_cfg_ptr = std::make_shared<nebula::drivers::HesaiSensorConfiguration>(config);
   return validate_and_set_config(new_cfg_ptr);
 }
 
 Status HesaiRosWrapper::validate_and_set_config(
-  std::shared_ptr<const drivers::HesaiSensorConfiguration> & new_config)
+  std::shared_ptr< drivers::HesaiSensorConfiguration> & new_config)
 {
   if (new_config->sensor_model == nebula::drivers::SensorModel::UNKNOWN) {
     return Status::INVALID_SENSOR_MODEL;
@@ -260,8 +260,9 @@ Status HesaiRosWrapper::validate_and_set_config(
   }
   if (!drivers::angle_is_between<double>(
         new_config->cloud_min_angle, new_config->cloud_max_angle, new_config->cut_angle)) {
-    RCLCPP_ERROR(get_logger(), "Cannot cut scan outside of the FoV.");
-    return Status::SENSOR_CONFIG_ERROR;
+      new_config->cut_angle=new_config->cloud_max_angle;
+      RCLCPP_INFO(get_logger(), "Cannot cut scan outside of the FoV. Changing to min FoV");
+    return Status::OK;
   }
 
   bool fov_is_360 = new_config->cloud_min_angle == 0 && new_config->cloud_max_angle == 360;
@@ -352,13 +353,13 @@ rcl_interfaces::msg::SetParametersResult HesaiRosWrapper::on_parameter_change(
 
   drivers::HesaiSensorConfiguration new_cfg(*sensor_cfg_ptr_);
 
-  std::string return_mode{};
+  std::string _return_mode="";
   std::string calibration_parameter_name =
     get_calibration_parameter_name(sensor_cfg_ptr_->sensor_model);
   std::string downsample_mask_path = new_cfg.downsample_mask_path.value_or("");
 
   bool got_any =
-    get_param(p, "return_mode", return_mode) | get_param(p, "frame_id", new_cfg.frame_id) |
+    get_param(p, "return_mode", _return_mode) | get_param(p, "frame_id", new_cfg.frame_id) |
     get_param(p, "sync_angle", new_cfg.sync_angle) | get_param(p, "cut_angle", new_cfg.cut_angle) |
     get_param(p, "min_range", new_cfg.min_range) | get_param(p, "max_range", new_cfg.max_range) |
     get_param(p, "rotation_speed", new_cfg.rotation_speed) |
@@ -366,7 +367,8 @@ rcl_interfaces::msg::SetParametersResult HesaiRosWrapper::on_parameter_change(
     get_param(p, "cloud_max_angle", new_cfg.cloud_max_angle) |
     get_param(p, "dual_return_distance_threshold", new_cfg.dual_return_distance_threshold) |
     get_param(p, calibration_parameter_name, new_cfg.calibration_path) |
-    get_param(p, "point_filters.downsample_mask.path", downsample_mask_path);
+    get_param(p, "point_filters.downsample_mask.path", downsample_mask_path)|
+    get_param(p, "launch_hw", launch_hw_);
 
   // Currently, all of the sub-wrappers read-only parameters, so they do not be queried for updates
 
@@ -374,9 +376,10 @@ rcl_interfaces::msg::SetParametersResult HesaiRosWrapper::on_parameter_change(
     return rcl_interfaces::build<SetParametersResult>().successful(true).reason("");
   }
 
-  if (return_mode.empty()) {
+  if (_return_mode.length() > 0) {
+    RCLCPP_INFO(get_logger(), "Current return_mode: %s", _return_mode.c_str());
     new_cfg.return_mode =
-      nebula::drivers::return_mode_from_string_hesai(return_mode, sensor_cfg_ptr_->sensor_model);
+      nebula::drivers::return_mode_from_string_hesai(_return_mode, sensor_cfg_ptr_->sensor_model);
   }
 
   if (!downsample_mask_path.empty()) {
@@ -418,7 +421,7 @@ rcl_interfaces::msg::SetParametersResult HesaiRosWrapper::on_parameter_change(
     new_calibration_ptr = get_calibration_result.value();
   }
 
-  auto new_cfg_ptr = std::make_shared<const nebula::drivers::HesaiSensorConfiguration>(new_cfg);
+  auto new_cfg_ptr = std::make_shared<nebula::drivers::HesaiSensorConfiguration>(new_cfg);
   auto status = validate_and_set_config(new_cfg_ptr);
   if (status != Status::OK) {
     RCLCPP_WARN_STREAM(get_logger(), "OnParameterChange aborted: " << status);
