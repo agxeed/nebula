@@ -21,6 +21,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <fstream>
 #include <iostream>
 #include <map>
@@ -29,20 +30,48 @@
 #include <stdexcept>
 #include <string>
 #include <tuple>
+#include <utility>
 #include <vector>
 namespace nebula
 {
 namespace drivers
 {
+
+bool supports_functional_safety(const SensorModel & sensor_model);
+
+struct AdvancedFunctionalSafetyConfiguration
+{
+  std::string error_definitions_path;
+  std::vector<uint16_t> ignored_error_codes;
+
+  friend std::ostream & operator<<(
+    std::ostream & os, const AdvancedFunctionalSafetyConfiguration & arg)
+  {
+    os << "advanced\n  error definitions: " << arg.error_definitions_path;
+    os << "\n  ignored codes: ";
+    if (!arg.ignored_error_codes.empty()) {
+      for (size_t i = 0; i < arg.ignored_error_codes.size(); ++i) {
+        if (i > 0) os << ", ";
+        os << "0x" << std::hex << arg.ignored_error_codes[i];
+      }
+    } else {
+      os << "none";
+    }
+    return os;
+  }
+};
+
 /// @brief struct for Hesai sensor configuration
 struct HesaiSensorConfiguration : public LidarConfigurationBase
 {
   std::string multicast_ip;
   uint16_t gnss_port{};
+  size_t udp_socket_receive_buffer_size_bytes{};
   uint16_t sync_angle{};
   double cut_angle{};
   double dual_return_distance_threshold{};
   std::string calibration_path;
+  bool calibration_download_enabled;
   uint16_t rotation_speed;
   uint16_t cloud_min_angle;
   uint16_t cloud_max_angle;
@@ -52,6 +81,10 @@ struct HesaiSensorConfiguration : public LidarConfigurationBase
   PtpSwitchType ptp_switch_type;
   uint8_t ptp_lock_threshold;
   std::optional<std::string> downsample_mask_path;
+  bool hires_mode;
+  std::optional<uint32_t> blockage_mask_horizontal_bin_size_mdeg;
+  std::optional<std::string> sync_diagnostics_topic;
+  std::optional<AdvancedFunctionalSafetyConfiguration> functional_safety;
 };
 /// @brief Convert HesaiSensorConfiguration to string (Overloading the << operator)
 /// @param os
@@ -64,6 +97,8 @@ inline std::ostream & operator<<(std::ostream & os, HesaiSensorConfiguration con
   os << "Multicast: "
      << (arg.multicast_ip.empty() ? "disabled" : "enabled, group: " + arg.multicast_ip) << '\n';
   os << "GNSS Port: " << arg.gnss_port << '\n';
+  os << "UDP Socket Receive Buffer Size: " << arg.udp_socket_receive_buffer_size_bytes << " B"
+     << '\n';
   os << "Rotation Speed: " << arg.rotation_speed << '\n';
   os << "Sync Angle: " << arg.sync_angle << '\n';
   os << "Cut Angle: " << arg.cut_angle << '\n';
@@ -71,14 +106,38 @@ inline std::ostream & operator<<(std::ostream & os, HesaiSensorConfiguration con
   os << "FoV End: " << arg.cloud_max_angle << '\n';
   os << "Dual Return Distance Threshold: " << arg.dual_return_distance_threshold << '\n';
   os << "Calibration Path: " << arg.calibration_path << '\n';
+  os << "Calibration Download: " << (arg.calibration_download_enabled ? "enabled" : "disabled")
+     << '\n';
   os << "PTP Profile: " << arg.ptp_profile << '\n';
   os << "PTP Domain: " << std::to_string(arg.ptp_domain) << '\n';
   os << "PTP Transport Type: " << arg.ptp_transport_type << '\n';
   os << "PTP Switch Type: " << arg.ptp_switch_type << '\n';
+  os << "High Resolution Mode: " << arg.hires_mode << '\n';
   os << "PTP Lock Threshold: " << std::to_string(arg.ptp_lock_threshold) << '\n';
+  os << "High Resolution Mode: " << (arg.hires_mode ? "enabled" : "disabled") << '\n';
   os << "Downsample Filter: "
      << (arg.downsample_mask_path ? "enabled, path: " + arg.downsample_mask_path.value()
-                                  : "disabled");
+                                  : "disabled")
+     << '\n';
+  os << "Blockage Mask Output: "
+     << (arg.blockage_mask_horizontal_bin_size_mdeg
+           ? "enabled, horizontal bin size: " +
+               std::to_string(arg.blockage_mask_horizontal_bin_size_mdeg.value()) + " mdeg"
+           : "disabled")
+     << '\n';
+  os << "Synchronization Diagnostics: "
+     << (arg.sync_diagnostics_topic ? ("enabled, topic: " + arg.sync_diagnostics_topic.value())
+                                    : "disabled");
+
+  if (supports_functional_safety(arg.sensor_model)) {
+    os << '\n';
+    os << "Functional Safety: ";
+    if (arg.functional_safety) {
+      os << *arg.functional_safety;
+    } else {
+      os << "basic";
+    }
+  }
   return os;
 }
 
@@ -201,6 +260,12 @@ struct HesaiCalibrationConfiguration : public HesaiCalibrationConfigurationBase
       min = std::min(min, item.second);
       max = std::max(max, item.second);
     }
+
+    // NOTE: Slightly widen the FOV padding because some LiDARs do not transmit blocks near the end
+    // of the FOV. If these blocks are missing, the point cloud may not be published at the desired
+    // timing.
+    min -= 1.0f;
+    max += 1.0f;
 
     return {-max, -min};
   }
@@ -554,6 +619,75 @@ inline int int_from_return_mode_hesai(
   }
 
   return -1;
+}
+
+/// @brief Whether the given sensor model supports lidar monitor requests
+/// @param sensor_model Sensor model
+/// @return True if the sensor model supports lidar monitor, false otherwise
+inline bool supports_lidar_monitor(const SensorModel & sensor_model)
+{
+  switch (sensor_model) {
+    case drivers::SensorModel::HESAI_PANDARAT128:
+    case drivers::SensorModel::HESAI_PANDAR40P:
+    case drivers::SensorModel::HESAI_PANDAR64:
+      return false;
+    default:
+      return true;
+  }
+}
+
+/// @brief Whether the given sensor model supports functional safety
+/// @param sensor_model Sensor model
+/// @return True if the sensor model supports functional safety, false otherwise
+inline bool supports_functional_safety(const SensorModel & sensor_model)
+{
+  switch (sensor_model) {
+    case SensorModel::HESAI_PANDAR128_E3X:
+    case SensorModel::HESAI_PANDAR128_E4X:
+    case SensorModel::HESAI_PANDARQT128:
+      return true;
+    default:
+      return false;
+  }
+}
+
+/// @brief Whether the given sensor model supports packet loss detection
+/// @param sensor_model Sensor model
+/// @return True if the sensor model supports packet loss detection, false otherwise
+inline bool supports_packet_loss_detection(const SensorModel & sensor_model)
+{
+  switch (sensor_model) {
+    case SensorModel::HESAI_PANDAR64:
+    case SensorModel::HESAI_PANDAR40P:
+    case SensorModel::HESAI_PANDAR40M:
+    case SensorModel::HESAI_PANDARQT128:
+    case SensorModel::HESAI_PANDARAT128:
+    case SensorModel::HESAI_PANDAR128_E3X:
+    case SensorModel::HESAI_PANDAR128_E4X:
+      return true;
+    default:
+      return false;
+  }
+}
+
+/// @brief Whether the given sensor model supports blockage mask output
+///
+/// Blockage mask output is only supported for OT128.
+///
+/// The QT128 datasheet mentions support for blockage detection, but its output does not distinguish
+/// between sky (no return) and blockage (too-close return). Thus, the output is not usable in the
+/// same way as OT128's.
+///
+/// @param sensor_model Sensor model
+/// @return True if the sensor model supports blockage mask output, false otherwise
+inline bool supports_blockage_mask(const SensorModel & sensor_model)
+{
+  switch (sensor_model) {
+    case SensorModel::HESAI_PANDAR128_E4X:
+      return true;
+    default:
+      return false;
+  }
 }
 
 }  // namespace drivers

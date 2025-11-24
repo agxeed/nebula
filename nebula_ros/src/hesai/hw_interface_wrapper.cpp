@@ -2,6 +2,7 @@
 
 #include "nebula_ros/hesai/hw_interface_wrapper.hpp"
 
+#include "nebula_hw_interfaces/nebula_hw_interfaces_hesai/hesai_cmd_response.hpp"
 #include "nebula_ros/common/parameter_descriptors.hpp"
 #include "nebula_ros/common/rclcpp_logger.hpp"
 
@@ -16,8 +17,9 @@ namespace nebula::ros
 HesaiHwInterfaceWrapper::HesaiHwInterfaceWrapper(
   rclcpp::Node * const parent_node,
   std::shared_ptr<const nebula::drivers::HesaiSensorConfiguration> & config, bool use_udp_only)
-: hw_interface_(std::make_shared<drivers::HesaiHwInterface>(
-    drivers::loggers::RclcppLogger(parent_node->get_logger()).child("HwInterface"))),
+: hw_interface_(
+    std::make_shared<drivers::HesaiHwInterface>(
+      drivers::loggers::RclcppLogger(parent_node->get_logger()).child("HwInterface"))),
   logger_(parent_node->get_logger().get_child("HwInterfaceWrapper")),
   status_(Status::NOT_INITIALIZED),
   use_udp_only_(use_udp_only)
@@ -51,8 +53,8 @@ HesaiHwInterfaceWrapper::HesaiHwInterfaceWrapper(
 
   if (status_ == Status::OK) {
     try {
-      auto inventory = hw_interface_->get_inventory();
-      hw_interface_->set_target_model(inventory->model_number());
+      inventory_ = hw_interface_->get_inventory();
+      hw_interface_->set_target_model(inventory_->model_number());
     } catch (...) {
       RCLCPP_ERROR_STREAM(logger_, "Failed to get model from sensor...");
     }
@@ -85,6 +87,11 @@ Status HesaiHwInterfaceWrapper::status()
 std::shared_ptr<drivers::HesaiHwInterface> HesaiHwInterfaceWrapper::hw_interface() const
 {
   return hw_interface_;
+}
+
+std::shared_ptr<const HesaiInventoryBase> HesaiHwInterfaceWrapper::inventory() const
+{
+  return inventory_;
 }
 
 }  // namespace nebula::ros

@@ -24,9 +24,8 @@
 #include <nebula_msgs/msg/nebula_packet.hpp>
 #include <nebula_msgs/msg/nebula_packets.hpp>
 
-#include <array>
+#include <cstdint>
 #include <memory>
-#include <vector>
 
 namespace nebula::drivers::continental_ars548
 {
@@ -74,6 +73,10 @@ public:
   Status register_packets_callback(
     std::function<void(std::unique_ptr<nebula_msgs::msg::NebulaPackets>)> packets_callback);
 
+  Status register_sync_status_callback(
+    std::function<void(uint64_t receive_time_ns, uint64_t packet_time_ns, bool sync_ok)>
+      sync_status_callback);
+
 private:
   /// @brief Function for parsing detection lists
   /// @param data
@@ -82,8 +85,10 @@ private:
 
   /// @brief Function for parsing object lists
   /// @param data
+  /// @param max_objects
   /// @return Resulting flag
-  bool parse_objects_list_packet(const nebula_msgs::msg::NebulaPacket & packet_msg);
+  bool parse_objects_list_packet(
+    const nebula_msgs::msg::NebulaPacket & packet_msg, const int & max_objects);
 
   /// @brief Function for parsing sensor status messages
   /// @param data
@@ -97,6 +102,8 @@ private:
   std::function<void(const ContinentalARS548Status & status)> sensor_status_callback_{};
   std::function<void(std::unique_ptr<nebula_msgs::msg::NebulaPackets> msg)>
     nebula_packets_callback_{};
+  std::function<void(uint64_t receive_time_ns, uint64_t packet_time_ns, bool sync_ok)>
+    sync_status_callback_;
 
   ContinentalARS548Status radar_status_{};
 

@@ -2,18 +2,22 @@
 
 #include "nebula_hw_interfaces/nebula_hw_interfaces_velodyne/velodyne_hw_interface.hpp"
 
+#include "nebula_common/util/string_conversions.hpp"
+
 #include <iostream>
 #include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace nebula::drivers
 {
-VelodyneHwInterface::VelodyneHwInterface()
-: cloud_io_context_{new ::drivers::common::IoContext(1)},
-  cloud_udp_driver_{new ::drivers::udp_driver::UdpDriver(*cloud_io_context_)},
-  boost_ctx_{new boost::asio::io_context()},
-  http_client_driver_{new ::drivers::tcp_driver::HttpClientDriver(boost_ctx_)}
+using std::string_literals::operator""s;
+
+VelodyneHwInterface::VelodyneHwInterface(const std::shared_ptr<loggers::Logger> & logger)
+: boost_ctx_{new boost::asio::io_context()},
+  http_client_driver_{new ::drivers::tcp_driver::HttpClientDriver(boost_ctx_)},
+  logger_{logger}
 {
 }
 
@@ -57,30 +61,27 @@ Status VelodyneHwInterface::set_sensor_configuration(
 
 Status VelodyneHwInterface::sensor_interface_start()
 {
-  try {
-    cloud_udp_driver_->init_receiver(
-      sensor_configuration_->host_ip, sensor_configuration_->data_port);
-    cloud_udp_driver_->receiver()->open();
-    cloud_udp_driver_->receiver()->bind();
-    cloud_udp_driver_->receiver()->asyncReceive(
-      std::bind(&VelodyneHwInterface::receive_sensor_packet_callback, this, std::placeholders::_1));
-  } catch (const std::exception & ex) {
-    Status status = Status::UDP_CONNECTION_ERROR;
-    std::cerr << status << sensor_configuration_->sensor_ip << ","
-              << sensor_configuration_->data_port << std::endl;
-    return status;
-  }
+  auto builder = connections::UdpSocket::Builder(
+    sensor_configuration_->host_ip, sensor_configuration_->data_port);
+
+  udp_socket_.emplace(std::move(builder).bind());
+  udp_socket_->subscribe([&](
+                           const std::vector<uint8_t> & packet,
+                           const connections::UdpSocket::RxMetadata & /* metadata */) {
+    receive_sensor_packet_callback(packet);
+  });
+
   return Status::OK;
 }
 
 Status VelodyneHwInterface::register_scan_callback(
-  std::function<void(std::vector<uint8_t> & packet)> scan_callback)
+  std::function<void(const std::vector<uint8_t> & packet)> scan_callback)
 {
   cloud_packet_callback_ = std::move(scan_callback);
   return Status::OK;
 }
 
-void VelodyneHwInterface::receive_sensor_packet_callback(std::vector<uint8_t> & buffer)
+void VelodyneHwInterface::receive_sensor_packet_callback(const std::vector<uint8_t> & buffer)
 {
   if (!cloud_packet_callback_) {
     return;
@@ -90,14 +91,17 @@ void VelodyneHwInterface::receive_sensor_packet_callback(std::vector<uint8_t> & 
 }
 Status VelodyneHwInterface::sensor_interface_stop()
 {
-  return Status::ERROR_1;
+  if (udp_socket_) {
+    udp_socket_->unsubscribe();
+  }
+  return Status::OK;
 }
 
 Status VelodyneHwInterface::get_sensor_configuration(SensorConfigurationBase & sensor_configuration)
 {
   std::stringstream ss;
   ss << sensor_configuration;
-  print_debug(ss.str());
+  logger_->debug(ss.str());
   return Status::ERROR_1;
 }
 
@@ -121,7 +125,7 @@ VelodyneStatus VelodyneHwInterface::init_http_client()
 
 void VelodyneHwInterface::string_callback(const std::string & str)
 {
-  std::cout << "VelodyneHwInterface::string_callback: " << str << std::endl;
+  logger_->debug("VelodyneHwInterface::string_callback: " + str);
 }
 
 boost::property_tree::ptree VelodyneHwInterface::parse_json(const std::string & str)
@@ -132,7 +136,7 @@ boost::property_tree::ptree VelodyneHwInterface::parse_json(const std::string & 
     ss << str;
     boost::property_tree::read_json(ss, tree);
   } catch (boost::property_tree::json_parser_error & e) {
-    std::cerr << "Error on ParseJson: " << e.what() << std::endl;
+    logger_->error("Error on ParseJson: "s + e.what());
   }
   return tree;
 }
@@ -152,11 +156,11 @@ VelodyneStatus VelodyneHwInterface::check_and_set_config(
     status = set_return_type(sensor_configuration->return_mode);
     if (status != ok) return status;
 
-    std::cout << "VelodyneHwInterface::parse_json(" << target_key
-              << "): " << current_return_mode_str << std::endl;
-    std::cout << "current_return_mode: " << current_return_mode << std::endl;
-    std::cout << "sensor_configuration->return_mode: " << sensor_configuration->return_mode
-              << std::endl;
+    logger_->debug(
+      "VelodyneHwInterface::parse_json(" + target_key + "): " + current_return_mode_str);
+    logger_->debug("current_return_mode: " + util::to_string(current_return_mode));
+    logger_->debug(
+      "sensor_configuration->return_mode: " + util::to_string(sensor_configuration->return_mode));
   }
 
   target_key = "config.rpm";
@@ -165,10 +169,12 @@ VelodyneStatus VelodyneHwInterface::check_and_set_config(
     status = set_rpm(sensor_configuration->rotation_speed);
     if (status != ok) return status;
 
-    std::cout << "VelodyneHwInterface::parse_json(" << target_key << "): " << current_rotation_speed
-              << std::endl;
-    std::cout << "sensor_configuration->rotation_speed: " << sensor_configuration->rotation_speed
-              << std::endl;
+    logger_->debug(
+      "VelodyneHwInterface::parse_json(" + target_key +
+      "): " + std::to_string(current_rotation_speed));
+    logger_->debug(
+      "sensor_configuration->rotation_speed: " +
+      std::to_string(sensor_configuration->rotation_speed));
   }
 
   target_key = "config.fov.start";
@@ -182,9 +188,11 @@ VelodyneStatus VelodyneHwInterface::check_and_set_config(
     status = set_fov_start(setting_cloud_min_angle);
     if (status != ok) return status;
 
-    std::cout << "VelodyneHwInterface::parse_json(" << target_key
-              << "): " << current_cloud_min_angle << std::endl;
-    std::cout << "sensor_configuration->cloud_min_angle: " << setting_cloud_min_angle << std::endl;
+    logger_->debug(
+      "VelodyneHwInterface::parse_json(" + target_key +
+      "): " + std::to_string(current_cloud_min_angle));
+    logger_->debug(
+      "sensor_configuration->cloud_min_angle: " + std::to_string(setting_cloud_min_angle));
   }
 
   target_key = "config.fov.end";
@@ -198,9 +206,11 @@ VelodyneStatus VelodyneHwInterface::check_and_set_config(
     status = set_fov_end(setting_cloud_max_angle);
     if (status != ok) return status;
 
-    std::cout << "VelodyneHwInterface::parse_json(" << target_key
-              << "): " << current_cloud_max_angle << std::endl;
-    std::cout << "sensor_configuration->cloud_max_angle: " << setting_cloud_max_angle << std::endl;
+    logger_->debug(
+      "VelodyneHwInterface::parse_json(" + target_key +
+      "): " + std::to_string(current_cloud_max_angle));
+    logger_->debug(
+      "sensor_configuration->cloud_max_angle: " + std::to_string(setting_cloud_max_angle));
   }
 
   target_key = "config.host.addr";
@@ -209,9 +219,8 @@ VelodyneStatus VelodyneHwInterface::check_and_set_config(
     status = set_host_addr(sensor_configuration->host_ip);
     if (status != ok) return status;
 
-    std::cout << "VelodyneHwInterface::parse_json(" << target_key << "): " << current_host_addr
-              << std::endl;
-    std::cout << "sensor_configuration->host_ip: " << sensor_configuration->host_ip << std::endl;
+    logger_->debug("VelodyneHwInterface::parse_json(" + target_key + "): " + current_host_addr);
+    logger_->debug("sensor_configuration->host_ip: " + sensor_configuration->host_ip);
   }
 
   target_key = "config.host.dport";
@@ -220,10 +229,10 @@ VelodyneStatus VelodyneHwInterface::check_and_set_config(
     status = set_host_dport(sensor_configuration->data_port);
     if (status != ok) return status;
 
-    std::cout << "VelodyneHwInterface::parse_json(" << target_key << "): " << current_host_dport
-              << std::endl;
-    std::cout << "sensor_configuration->data_port: " << sensor_configuration->data_port
-              << std::endl;
+    logger_->debug(
+      "VelodyneHwInterface::parse_json(" + target_key + "): " + std::to_string(current_host_dport));
+    logger_->debug(
+      "sensor_configuration->data_port: " + std::to_string(sensor_configuration->data_port));
   }
 
   target_key = "config.host.tport";
@@ -232,10 +241,10 @@ VelodyneStatus VelodyneHwInterface::check_and_set_config(
     status = set_host_tport(sensor_configuration->gnss_port);
     if (status != ok) return status;
 
-    std::cout << "VelodyneHwInterface::parse_json(" << target_key << "): " << current_host_tport
-              << std::endl;
-    std::cout << "sensor_configuration->gnss_port: " << sensor_configuration->gnss_port
-              << std::endl;
+    logger_->debug(
+      "VelodyneHwInterface::parse_json(" + target_key + "): " + std::to_string(current_host_tport));
+    logger_->debug(
+      "sensor_configuration->gnss_port: " + std::to_string(sensor_configuration->gnss_port));
   }
 
   return ok;
@@ -252,7 +261,7 @@ nebula::util::expected<std::string, VelodyneStatus> VelodyneHwInterface::get_dia
 {
   auto response = http_get_request(target_diag_);
   if (response.has_value()) {
-    std::cout << "read_response: " << response.value() << std::endl;
+    logger_->debug("read_response: " + response.value());
   }
   return response;
 }
@@ -449,38 +458,6 @@ VelodyneStatus VelodyneHwInterface::set_net_dhcp(bool use_dhcp)
   }
   string_callback(rt.value());
   return Status::OK;
-}
-
-void VelodyneHwInterface::set_logger(std::shared_ptr<rclcpp::Logger> logger)
-{
-  parent_node_logger_ = logger;
-}
-
-void VelodyneHwInterface::print_info(std::string info)
-{
-  if (parent_node_logger_) {
-    RCLCPP_INFO_STREAM((*parent_node_logger_), info);
-  } else {
-    std::cout << info << std::endl;
-  }
-}
-
-void VelodyneHwInterface::print_error(std::string error)
-{
-  if (parent_node_logger_) {
-    RCLCPP_ERROR_STREAM((*parent_node_logger_), error);
-  } else {
-    std::cerr << error << std::endl;
-  }
-}
-
-void VelodyneHwInterface::print_debug(std::string debug)
-{
-  if (parent_node_logger_) {
-    RCLCPP_DEBUG_STREAM((*parent_node_logger_), debug);
-  } else {
-    std::cout << debug << std::endl;
-  }
 }
 
 }  // namespace nebula::drivers

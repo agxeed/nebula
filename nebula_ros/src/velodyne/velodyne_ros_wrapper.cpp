@@ -20,13 +20,7 @@ namespace nebula::ros
 VelodyneRosWrapper::VelodyneRosWrapper(const rclcpp::NodeOptions & options)
 : rclcpp::Node("velodyne_ros_wrapper", rclcpp::NodeOptions(options).use_intra_process_comms(true)),
   wrapper_status_(Status::NOT_INITIALIZED),
-  sensor_cfg_ptr_(nullptr),
-  packet_queue_(3000),
-  hw_interface_wrapper_(),
-  hw_monitor_wrapper_(),
-  decoder_wrapper_(),
-  hw_reconfigure_timer_(this->create_wall_timer(
-    std::chrono::seconds(1), std::bind(&VelodyneRosWrapper::reconfigure_hw_interface, this)))
+  sensor_cfg_ptr_(nullptr)
 {
   hw_reconfigure_timer_->cancel();
   setvbuf(stdout, NULL, _IONBF, BUFSIZ);
@@ -50,7 +44,21 @@ VelodyneRosWrapper::VelodyneRosWrapper(const rclcpp::NodeOptions & options)
   }
 
   if (launch_hw_) {
-    bringup_hw(use_udp_only_);
+    hw_interface_wrapper_.emplace(this, sensor_cfg_ptr_, use_udp_only);
+    if (!use_udp_only) {  // hardware monitor requires HTTP connection
+      hw_monitor_wrapper_.emplace(this, hw_interface_wrapper_->hw_interface(), sensor_cfg_ptr_);
+    }
+  }
+
+  decoder_wrapper_.emplace(
+    this, hw_interface_wrapper_ ? hw_interface_wrapper_->hw_interface() : nullptr, sensor_cfg_ptr_);
+
+  RCLCPP_DEBUG(get_logger(), "Starting stream");
+
+  if (launch_hw_) {
+    hw_interface_wrapper_->hw_interface()->register_scan_callback(
+      [this](const auto & packet) { receive_cloud_packet_callback(packet); });
+    stream_start();
   } else {
     create_packet_subscriber();
   }
@@ -187,7 +195,13 @@ Status VelodyneRosWrapper::validate_and_set_config(
   if (new_config->frame_id.empty()) {
     return Status::SENSOR_CONFIG_ERROR;
   }
-
+  if (new_config->host_ip == "255.255.255.255") {
+    RCLCPP_ERROR(
+      get_logger(),
+      "Due to potential network performance issues when using IP broadcast for sensor data, Nebula "
+      "disallows use of the broadcast IP. Please specify the concrete host IP instead.");
+    return Status::SENSOR_CONFIG_ERROR;
+  }
   if (hw_interface_wrapper_) {
     hw_interface_wrapper_->on_config_change(new_config);
   }
@@ -218,7 +232,7 @@ void VelodyneRosWrapper::receive_scan_message_callback(
     nebula_pkt_ptr->stamp = pkt.stamp;
     std::copy(pkt.data.begin(), pkt.data.end(), std::back_inserter(nebula_pkt_ptr->data));
 
-    packet_queue_.push(std::move(nebula_pkt_ptr));
+    decoder_wrapper_->process_cloud_packet(std::move(nebula_pkt_ptr));
   }
 }
 
@@ -346,7 +360,7 @@ rcl_interfaces::msg::SetParametersResult VelodyneRosWrapper::on_parameter_change
   return rcl_interfaces::build<SetParametersResult>().successful(true).reason("");
 }
 
-void VelodyneRosWrapper::receive_cloud_packet_callback(std::vector<uint8_t> & packet)
+void VelodyneRosWrapper::receive_cloud_packet_callback(const std::vector<uint8_t> & packet)
 {
   if (!decoder_wrapper_ || decoder_wrapper_->status() != Status::OK) {
     return;
@@ -359,11 +373,9 @@ void VelodyneRosWrapper::receive_cloud_packet_callback(std::vector<uint8_t> & pa
   auto msg_ptr = std::make_unique<nebula_msgs::msg::NebulaPacket>();
   msg_ptr->stamp.sec = static_cast<int>(timestamp_ns / 1'000'000'000);
   msg_ptr->stamp.nanosec = static_cast<int>(timestamp_ns % 1'000'000'000);
-  msg_ptr->data.swap(packet);
+  msg_ptr->data = packet;
 
-  if (!packet_queue_.try_push(std::move(msg_ptr))) {
-    RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 500, "Packet(s) dropped");
-  }
+  decoder_wrapper_->process_cloud_packet(std::move(msg_ptr));
 }
 
 RCLCPP_COMPONENTS_REGISTER_NODE(VelodyneRosWrapper)

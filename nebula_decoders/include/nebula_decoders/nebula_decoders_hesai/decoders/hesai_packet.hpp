@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <ctime>
 #include <stdexcept>
+#include <type_traits>
 namespace nebula::drivers::hesai_packet
 {
 
@@ -86,16 +87,6 @@ struct SecondsSinceEpoch
     }
     return seconds;
   }
-};
-
-struct FunctionalSafety
-{
-  uint8_t fs_version;
-  uint8_t lidar_state;
-  uint8_t fault_code_id;
-  uint16_t fault_code;
-  uint8_t reserved1[8];
-  uint32_t crc_fs;
 };
 
 struct Header12B
@@ -179,6 +170,13 @@ struct Body
   BlockT blocks[BlockN];
 };
 
+template <typename BlockT, size_t BlockN>
+struct BodyWithCrc : public Body<BlockT, BlockN>
+{
+  using Body<BlockT, BlockN>::blocks;
+  uint32_t crc_body;
+};
+
 /// @brief Base struct for all Hesai packets. This struct is not allowed to have any non-static
 /// members, otherwise memory layout is not guaranteed for the derived structs.
 /// @tparam nBlocks The number of blocks in the packet
@@ -242,5 +240,29 @@ double get_dis_unit(const PacketT & packet)
   // Packets define distance unit in millimeters, convert to meters here
   return packet.header.dis_unit / 1000.;
 }
+
+// Helper trait to determine if a given struct has a functional safety part
+template <typename PacketT, typename = void>
+struct HasFunctionalSafety : std::false_type
+{
+};
+
+template <typename PacketT>
+struct HasFunctionalSafety<PacketT, std::void_t<decltype(std::declval<PacketT>().fs)>>
+: std::true_type
+{
+};
+
+// Helper trait to determine if a given struct has a packet loss detection part
+template <typename PacketT, typename = void>
+struct HasPacketLossDetection : std::false_type
+{
+};
+
+template <typename PacketT>
+struct HasPacketLossDetection<
+  PacketT, std::void_t<decltype(std::declval<PacketT>().tail.udp_sequence)>> : std::true_type
+{
+};
 
 }  // namespace nebula::drivers::hesai_packet

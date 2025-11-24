@@ -18,14 +18,21 @@
 #include "nebula_common/hesai/hesai_common.hpp"
 #include "nebula_common/nebula_status.hpp"
 #include "nebula_common/point_types.hpp"
+#include "nebula_decoders/nebula_decoders_common/point_filters/blockage_mask.hpp"
+#include "nebula_decoders/nebula_decoders_hesai/decoders/functional_safety.hpp"
+#include "nebula_decoders/nebula_decoders_hesai/decoders/hesai_packet.hpp"
 #include "nebula_decoders/nebula_decoders_hesai/decoders/hesai_scan_decoder.hpp"
+#include "nebula_decoders/nebula_decoders_hesai/decoders/packet_loss_detector.hpp"
 
 #include <nebula_common/loggers/logger.hpp>
 
 #include <pcl_conversions/pcl_conversions.h>
 
+#include <cstdint>
 #include <memory>
 #include <tuple>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace nebula::drivers
@@ -44,7 +51,60 @@ private:
   std::shared_ptr<HesaiScanDecoder> initialize_decoder(
     const std::shared_ptr<const drivers::HesaiSensorConfiguration> & sensor_configuration,
     const std::shared_ptr<const drivers::HesaiCalibrationConfigurationBase> &
-      calibration_configuration);
+      calibration_configuration,
+    FunctionalSafetyDecoderBase::alive_cb_t alive_cb,
+    FunctionalSafetyDecoderBase::stuck_cb_t stuck_cb,
+    FunctionalSafetyDecoderBase::status_cb_t status_cb, PacketLossDetectorBase::lost_cb_t lost_cb,
+    std::shared_ptr<point_filters::BlockageMaskPlugin> blockage_mask_plugin = nullptr);
+
+  template <typename SensorT>
+  std::enable_if_t<
+    hesai_packet::HasFunctionalSafety<typename SensorT::packet_t>::value,
+    std::shared_ptr<FunctionalSafetyDecoderTypedBase<typename SensorT::packet_t>>>
+  initialize_functional_safety_decoder(
+    FunctionalSafetyDecoderBase::alive_cb_t alive_cb,
+    FunctionalSafetyDecoderBase::stuck_cb_t stuck_cb,
+    FunctionalSafetyDecoderBase::status_cb_t status_cb, uint16_t sensor_rpm)
+  {
+    auto functional_safety_decoder =
+      std::make_shared<FunctionalSafetyDecoder<typename SensorT::packet_t>>(sensor_rpm);
+    functional_safety_decoder->set_alive_callback(std::move(alive_cb));
+    functional_safety_decoder->set_stuck_callback(std::move(stuck_cb));
+    functional_safety_decoder->set_status_callback(std::move(status_cb));
+    return functional_safety_decoder;
+  }
+
+  template <typename SensorT>
+  std::enable_if_t<
+    !hesai_packet::HasFunctionalSafety<typename SensorT::packet_t>::value,
+    std::shared_ptr<FunctionalSafetyDecoderTypedBase<typename SensorT::packet_t>>>
+  initialize_functional_safety_decoder(
+    FunctionalSafetyDecoderBase::alive_cb_t /* alive_cb */,
+    FunctionalSafetyDecoderBase::stuck_cb_t /* stuck_cb */,
+    FunctionalSafetyDecoderBase::status_cb_t /* status_cb */, uint16_t /* sensor_rpm */)
+  {
+    return nullptr;
+  }
+
+  template <typename SensorT>
+  std::enable_if_t<
+    hesai_packet::HasPacketLossDetection<typename SensorT::packet_t>::value,
+    std::shared_ptr<PacketLossDetectorTypedBase<typename SensorT::packet_t>>>
+  initialize_packet_loss_detector(PacketLossDetectorBase::lost_cb_t lost_cb)
+  {
+    auto packet_loss_detector = std::make_shared<PacketLossDetector<typename SensorT::packet_t>>();
+    packet_loss_detector->set_lost_callback(std::move(lost_cb));
+    return packet_loss_detector;
+  }
+
+  template <typename SensorT>
+  std::enable_if_t<
+    !hesai_packet::HasPacketLossDetection<typename SensorT::packet_t>::value,
+    std::shared_ptr<PacketLossDetectorTypedBase<typename SensorT::packet_t>>>
+  initialize_packet_loss_detector(PacketLossDetectorBase::lost_cb_t /* lost_cb */)
+  {
+    return nullptr;
+  }
 
 public:
   HesaiDriver() = delete;
@@ -52,11 +112,17 @@ public:
   /// @param sensor_configuration SensorConfiguration for this driver
   /// @param calibration_configuration CalibrationConfiguration for this driver (either
   /// HesaiCalibrationConfiguration for sensors other than AT128 or HesaiCorrection for AT128)
-  explicit HesaiDriver(
+  HesaiDriver(
     const std::shared_ptr<const drivers::HesaiSensorConfiguration> & sensor_configuration,
     const std::shared_ptr<const drivers::HesaiCalibrationConfigurationBase> &
       calibration_configuration,
-    const std::shared_ptr<loggers::Logger> & logger);
+    const std::shared_ptr<loggers::Logger> & logger,
+    HesaiScanDecoder::pointcloud_callback_t pointcloud_cb,
+    FunctionalSafetyDecoderBase::alive_cb_t alive_cb = nullptr,
+    FunctionalSafetyDecoderBase::stuck_cb_t stuck_cb = nullptr,
+    FunctionalSafetyDecoderBase::status_cb_t status_cb = nullptr,
+    PacketLossDetectorBase::lost_cb_t lost_cb = nullptr,
+    std::shared_ptr<point_filters::BlockageMaskPlugin> blockage_mask_plugin = nullptr);
 
   /// @brief Get current status of this driver
   /// @return Current status
@@ -68,11 +134,13 @@ public:
   Status set_calibration_configuration(
     const HesaiCalibrationConfigurationBase & calibration_configuration);
 
-  /// @brief Convert raw packet to pointcloud
-  /// @param packet Packet to convert
-  /// @return Tuple of pointcloud and timestamp
-  std::tuple<drivers::NebulaPointCloudPtr, double> parse_cloud_packet(
-    const std::vector<uint8_t> & packet);
+  void set_pointcloud_callback(HesaiScanDecoder::pointcloud_callback_t pointcloud_cb);
+
+  /// @brief Decode a pointcloud packet. If a pointcloud is produced, `pointcloud_cb` is called.
+  /// @param packet Packet to decode
+  /// @return Metadata on success, or decode error on failure. Performance counters are always
+  /// returned.
+  PacketDecodeResult parse_cloud_packet(const std::vector<uint8_t> & packet);
 };
 
 }  // namespace nebula::drivers

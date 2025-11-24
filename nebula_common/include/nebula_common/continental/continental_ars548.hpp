@@ -22,8 +22,12 @@
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 
+#include <iomanip>
 #include <iostream>
+#include <optional>
+#include <sstream>
 #include <string>
+#include <vector>
 
 namespace nebula
 {
@@ -34,7 +38,19 @@ namespace continental_ars548
 
 inline bool is_corner_radar(float yaw)
 {
-  return std::abs(yaw) > deg2rad(5.0) && std::abs(yaw) < deg2rad(90.0);
+  return std::abs(yaw) > deg2rad(5.0) && std::abs(yaw) < deg2rad(175.0);
+}
+
+inline std::string extract_firmware_version(uint8_t major, uint8_t minor, uint8_t patch)
+{
+  // Continental changed the versioning scheme at some point
+  std::ostringstream oss;
+  if (minor == 0x48) {
+    oss << std::hex << static_cast<int>(major) << "." << static_cast<int>(minor) << "."
+        << static_cast<int>(patch);
+    return oss.str();
+  }
+  return std::to_string(major) + "." + std::to_string(minor) + "." + std::to_string(patch);
 }
 
 /// @brief struct for ARS548 sensor configuration
@@ -46,10 +62,16 @@ struct ContinentalARS548SensorConfiguration : EthernetSensorConfigurationBase
   uint16_t configuration_host_port{};
   uint16_t configuration_sensor_port{};
   bool use_sensor_time{};
+  int radar_info_rate_subsample{};
   float configuration_vehicle_length{};
   float configuration_vehicle_width{};
   float configuration_vehicle_height{};
   float configuration_vehicle_wheelbase{};
+  uint8_t blockage_status_level_ok{};
+  uint8_t blockage_status_level_warn{};
+  uint8_t blockage_test_level_ok{};
+  uint8_t blockage_test_level_warn{};
+  std::optional<std::string> sync_diagnostics_topic;
 };
 
 /// @brief Convert ContinentalARS548SensorConfiguration to string (Overloading the <<
@@ -68,10 +90,14 @@ inline std::ostream & operator<<(
   os << "Host Port: " << arg.configuration_host_port << '\n';
   os << "Sensor Port: " << arg.configuration_sensor_port << '\n';
   os << "UseSensor Time: " << arg.use_sensor_time << '\n';
+  os << "RadarInfo Rate Subsample: " << arg.radar_info_rate_subsample << '\n';
   os << "Vehicle Length: " << arg.configuration_vehicle_length << '\n';
   os << "Vehicle Width: " << arg.configuration_vehicle_width << '\n';
   os << "Vehicle Height: " << arg.configuration_vehicle_height << '\n';
-  os << "Vehicle Wheelbase: " << arg.configuration_vehicle_wheelbase;
+  os << "Vehicle Wheelbase: " << arg.configuration_vehicle_wheelbase << '\n';
+  os << "Synchronization Diagnostics: "
+     << (arg.sync_diagnostics_topic ? ("enabled, topic: " + arg.sync_diagnostics_topic.value())
+                                    : "disabled");
   return os;
 }
 
@@ -131,6 +157,11 @@ struct ContinentalARS548Status
 
   uint64_t status_total_count{};
   uint64_t radar_invalid_count{};
+
+  u_char dynamics_diagnostics_status{};
+  u_char internal_diagnostics_status{};
+  u_char blockage_diagnostics_status{};
+  u_char configuration_diagnostics_status{};
 
   ContinentalARS548Status() {}
 
@@ -232,19 +263,33 @@ constexpr int sensor_status_method_id = 380;
 constexpr int filter_status_method_id = 396;
 
 constexpr int detection_list_udp_payload = 35336;
-constexpr int object_list_udp_payload = 9401;
+constexpr int object_list_udp_payload_common = 9401;
+constexpr int object_list_udp_payload_fw40 = 37452;
 constexpr int sensor_status_udp_payload = 84;
 constexpr int filter_status_udp_payload = 330;
 
 constexpr int detection_list_pdu_length = 35328;
-constexpr int object_list_pdu_length = 9393;
+constexpr int object_list_pdu_length_common = 9393;
+constexpr int object_list_pdu_length_fw40 = 37444;
 constexpr int sensor_status_pdu_length = 76;
 constexpr int filter_status_pdu_length = 322;
 
 constexpr int detection_filter_properties_num = 7;
 constexpr int object_filter_properties_num = 24;
 constexpr int max_detections = 800;
-constexpr int max_objects = 50;
+constexpr int max_objects_common = 50;
+constexpr int max_objects_fw40 = 200;
+
+constexpr int sw_version_minor_corner_radar = 40;
+
+constexpr int measurement_status_measured = 0;
+constexpr int measurement_status_predicted = 1;
+constexpr int measurement_status_new = 2;
+constexpr int measurement_status_invalid = 255;
+
+constexpr int movement_status_dynamic = 0;
+constexpr int movement_status_static = 1;
+constexpr int movement_status_invalid = 255;
 
 constexpr int sync_ok = 1;
 constexpr int never_sync = 2;
@@ -252,6 +297,8 @@ constexpr int sync_lost = 3;
 
 constexpr int plug_right = 0;
 constexpr int plug_left = 1;
+
+constexpr float raw_prob_norm = 100.f;
 
 constexpr int maximum_distance_min_value = 93;
 constexpr int maximum_distance_max_value = 1514;
@@ -291,6 +338,63 @@ constexpr int blockage_test_ongoing = 2;
 
 constexpr int min_odometry_hz = 10;
 constexpr int max_odometry_hz = 50;
+
+struct FieldInfo
+{
+  FieldInfo(
+    std::optional<float> min_value, std::optional<float> max_value,
+    std::optional<float> resolution) noexcept
+  : min_value(min_value), max_value(max_value), resolution(resolution)
+  {
+  }
+  std::optional<float> min_value;
+  std::optional<float> max_value;
+  std::optional<float> resolution;
+};
+
+// Detection field infos
+const FieldInfo azimuth_info{-M_PI, M_PI, std::nullopt};
+const FieldInfo azimuth_std_info{0.f, 1.f, std::nullopt};
+const FieldInfo elevation_info{-M_PI, M_PI, std::nullopt};
+const FieldInfo elevation_std_info{0.f, 1.f, std::nullopt};
+
+const FieldInfo range_info{0.f, 301.f, std::nullopt};
+const FieldInfo range_std_info{0.f, 1.f, std::nullopt};
+const FieldInfo range_rate_info{-100.f, 100.f, 0.f};
+const FieldInfo range_rate_std_info{0.f, 1.f, std::nullopt};
+
+const FieldInfo rcs_info{-128.f, 127.f, 1.f};
+const FieldInfo measurement_id_info{0.f, 65535.f, 1.f};
+const FieldInfo positive_predictive_value_info{0.f, 100.f, 1.f};
+const FieldInfo classification_info{0.f, 255.f, 1.f};
+const FieldInfo multi_target_probability_info{0.f, 1.f, 0.01f};
+const FieldInfo object_id_info{0.f, 65535.f, 1.f};
+const FieldInfo ambiguity_flag_info{0.f, 1.f, 0.01f};
+
+// Object field infos
+const FieldInfo age_info{0.f, 65535.f, 1.f};
+const FieldInfo measurement_status_info{0.f, 255.f, 1.f};
+const FieldInfo movement_status_info{0.f, 255.f, 1.f};
+
+const FieldInfo position_x_info{-1600.f, 1600.f, std::nullopt};
+const FieldInfo position_y_info{-1600.f, 1600.f, std::nullopt};
+const FieldInfo position_z_info{-1600.f, 1600.f, std::nullopt};
+
+const FieldInfo velocity_x_info{std::nullopt, std::nullopt, std::nullopt};
+const FieldInfo velocity_y_info{std::nullopt, std::nullopt, std::nullopt};
+
+const FieldInfo acceleration_x_info{std::nullopt, std::nullopt, std::nullopt};
+const FieldInfo acceleration_y_info{std::nullopt, std::nullopt, std::nullopt};
+
+const FieldInfo size_x_info{std::nullopt, std::nullopt, std::nullopt};
+const FieldInfo size_y_info{std::nullopt, std::nullopt, std::nullopt};
+
+const FieldInfo orientation_info{-M_PI, M_PI, std::nullopt};
+const FieldInfo orientation_std_info{0.f, std::nullopt, std::nullopt};
+const FieldInfo orientation_rate_info{std::nullopt, std::nullopt, std::nullopt};
+const FieldInfo orientation_rate_std_info{0.f, std::nullopt, std::nullopt};
+
+const FieldInfo existence_probability_info{0.f, 1.f, 0.01f};
 
 #pragma pack(push, 1)
 
@@ -339,11 +443,11 @@ struct DetectionPacket
   big_float32_buf_t range_rate_std{};
   int8_t rcs{};
   big_uint16_buf_t measurement_id{};
-  uint8_t positive_predictive_value{};
+  uint8_t raw_positive_predictive_value{};
   uint8_t classification{};
-  uint8_t multi_target_probability{};
+  uint8_t raw_multi_target_probability{};
   big_uint16_buf_t object_id{};
-  uint8_t ambiguity_flag{};
+  uint8_t raw_ambiguity_flag{};
   big_uint16_buf_t sort_index{};
 };
 
@@ -398,16 +502,16 @@ struct ObjectPacket
   big_float32_buf_t position_orientation{};
   big_float32_buf_t position_orientation_std{};
   uint8_t existence_invalid_flags{};
-  big_float32_buf_t existence_probability{};
+  big_float32_buf_t raw_existence_probability{};
   big_float32_buf_t existence_ppv{};
-  uint8_t classification_car{};
-  uint8_t classification_truck{};
-  uint8_t classification_motorcycle{};
-  uint8_t classification_bicycle{};
-  uint8_t classification_pedestrian{};
-  uint8_t classification_animal{};
-  uint8_t classification_hazard{};
-  uint8_t classification_unknown{};
+  uint8_t raw_classification_car{};
+  uint8_t raw_classification_truck{};
+  uint8_t raw_classification_motorcycle{};
+  uint8_t raw_classification_bicycle{};
+  uint8_t raw_classification_pedestrian{};
+  uint8_t raw_classification_animal{};
+  uint8_t raw_classification_hazard{};
+  uint8_t raw_classification_unknown{};
   uint8_t classification_overdrivable{};
   uint8_t classification_underdrivable{};
   uint8_t dynamics_abs_vel_invalid_flags{};
@@ -456,7 +560,7 @@ struct ObjectListPacket
   big_uint32_buf_t event_data_qualifier{};
   uint8_t extended_qualifier{};
   uint8_t number_of_objects{};
-  ObjectPacket objects[max_objects];
+  std::vector<ObjectPacket> objects;
 };
 
 struct StatusConfigurationPacket
@@ -595,6 +699,12 @@ struct FilterStatusPacket
 };
 
 #pragma pack(pop)
+
+template <typename T>
+inline float normalize_probability(T & raw_prob)
+{
+  return static_cast<float>(raw_prob) / raw_prob_norm;
+};
 
 struct EIGEN_ALIGN16 PointARS548Detection
 {

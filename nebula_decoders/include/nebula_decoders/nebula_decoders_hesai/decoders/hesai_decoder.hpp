@@ -15,15 +15,19 @@
 #pragma once
 
 #include "nebula_decoders/nebula_decoders_common/angles.hpp"
+#include "nebula_decoders/nebula_decoders_common/point_filters/blockage_mask.hpp"
 #include "nebula_decoders/nebula_decoders_common/point_filters/downsample_mask.hpp"
 #include "nebula_decoders/nebula_decoders_hesai/decoders/angle_corrector.hpp"
+#include "nebula_decoders/nebula_decoders_hesai/decoders/functional_safety.hpp"
 #include "nebula_decoders/nebula_decoders_hesai/decoders/hesai_packet.hpp"
 #include "nebula_decoders/nebula_decoders_hesai/decoders/hesai_scan_decoder.hpp"
+#include "nebula_decoders/nebula_decoders_hesai/decoders/packet_loss_detector.hpp"
 
 #include <nebula_common/hesai/hesai_common.hpp>
 #include <nebula_common/loggers/logger.hpp>
 #include <nebula_common/nebula_common.hpp>
 #include <nebula_common/point_types.hpp>
+#include <nebula_common/util/stopwatch.hpp>
 #include <rclcpp/logging.hpp>
 #include <rclcpp/rclcpp.hpp>
 
@@ -33,7 +37,6 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
-#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -43,6 +46,7 @@ namespace nebula::drivers
 template <typename SensorT>
 class HesaiDecoder : public HesaiScanDecoder
 {
+private:
   struct ScanCutAngles
   {
     float fov_min;
@@ -50,30 +54,33 @@ class HesaiDecoder : public HesaiScanDecoder
     float scan_emit_angle;
   };
 
-private:
+  struct DecodeFrame
+  {
+    NebulaPointCloudPtr pointcloud;
+    uint64_t scan_timestamp_ns{0};
+    std::optional<point_filters::BlockageMask> blockage_mask;
+  };
+
   /// @brief Configuration for this decoder
   const std::shared_ptr<const drivers::HesaiSensorConfiguration> sensor_configuration_;
 
   /// @brief The sensor definition, used for return mode and time offset handling
   SensorT sensor_{};
 
+  /// @brief A function that is called on each decoded pointcloud frame
+  pointcloud_callback_t pointcloud_callback_;
+
   /// @brief Decodes azimuth/elevation angles given calibration/correction data
   typename SensorT::angle_corrector_t angle_corrector_;
 
-  /// @brief The point cloud new points get added to
-  NebulaPointCloudPtr decode_pc_;
-  /// @brief The point cloud that is returned when a scan is complete
-  NebulaPointCloudPtr output_pc_;
+  /// @brief Decodes functional safety data for supported sensors
+  std::shared_ptr<FunctionalSafetyDecoderTypedBase<typename SensorT::packet_t>>
+    functional_safety_decoder_;
+
+  std::shared_ptr<PacketLossDetectorTypedBase<typename SensorT::packet_t>> packet_loss_detector_;
 
   /// @brief The last decoded packet
   typename SensorT::packet_t packet_;
-
-  /// @brief The timestamp of the last completed scan in nanoseconds
-  uint64_t output_scan_timestamp_ns_ = 0;
-  /// @brief The timestamp of the scan currently in progress
-  uint64_t decode_scan_timestamp_ns_ = 0;
-  /// @brief Whether a full scan has been processed
-  bool has_scanned_ = false;
 
   ScanCutAngles scan_cut_angles_;
   uint32_t last_azimuth_ = 0;
@@ -89,7 +96,14 @@ private:
 
   std::optional<point_filters::DownsampleMaskFilter> mask_filter_;
 
-  /// @brief Validates and parse PandarPacket. Currently only checks size, not checksums etc.
+  std::shared_ptr<point_filters::BlockageMaskPlugin> blockage_mask_plugin_;
+
+  /// @brief Decoded data of the frame currently being decoded to
+  DecodeFrame decode_frame_;
+  /// @brief Decoded data of the frame currently being output
+  DecodeFrame output_frame_;
+
+  /// @brief Validates and parse PandarPacket. Checks size and, if present, CRC checksums.
   /// @param packet The incoming PandarPacket
   /// @return Whether the packet was parsed successfully
   bool parse_packet(const std::vector<uint8_t> & packet)
@@ -100,14 +114,13 @@ private:
                                                  << sizeof(typename SensorT::packet_t));
       return false;
     }
-    if (std::memcpy(&packet_, packet.data(), sizeof(typename SensorT::packet_t))) {
-      // FIXME(mojomex) do validation?
-      // RCLCPP_DEBUG(logger_, "Packet parsed successfully");
-      return true;
+
+    if (!std::memcpy(&packet_, packet.data(), sizeof(typename SensorT::packet_t))) {
+      logger_->error("Packet memcopy failed");
+      return false;
     }
 
-    logger_->error("Packet memcopy failed");
-    return false;
+    return true;
   }
 
   /// @brief Converts a group of returns (i.e. 1 for single return, 2 for dual return, etc.) to
@@ -122,6 +135,9 @@ private:
 
     std::vector<const typename SensorT::packet_t::body_t::block_t::unit_t *> return_units;
 
+    // If the blockage mask plugin is not present, we can return early if distance checks fail
+    const bool filters_can_return_early = !blockage_mask_plugin_;
+
     for (size_t channel_id = 0; channel_id < SensorT::packet_t::n_channels; ++channel_id) {
       // Find the units corresponding to the same return group as the current one.
       // These are used to find duplicates in multi-return mode.
@@ -134,8 +150,10 @@ private:
       for (size_t block_offset = 0; block_offset < n_blocks; ++block_offset) {
         auto & unit = *return_units[block_offset];
 
+        bool point_is_valid = true;
+
         if (unit.distance == 0) {
-          continue;
+          point_is_valid = false;
         }
 
         float distance = get_distance(unit);
@@ -144,7 +162,7 @@ private:
           distance < SensorT::min_range || SensorT::max_range < distance ||
           distance < sensor_configuration_->min_range ||
           sensor_configuration_->max_range < distance) {
-          continue;
+          point_is_valid = false;
         }
 
         auto return_type = sensor_.get_return_type(
@@ -153,7 +171,7 @@ private:
 
         // Keep only last of multiple identical points
         if (return_type == ReturnType::IDENTICAL && block_offset != n_blocks - 1) {
-          continue;
+          point_is_valid = false;
         }
 
         // Keep only last (if any) of multiple points that are too close
@@ -174,8 +192,12 @@ private:
           }
 
           if (is_below_multi_return_threshold) {
-            continue;
+            point_is_valid = false;
           }
+        }
+
+        if (filters_can_return_early && !point_is_valid) {
+          continue;
         }
 
         CorrectedAngleData corrected_angle_data =
@@ -197,15 +219,22 @@ private:
           in_current_scan = false;
         }
 
-        auto pc = in_current_scan ? decode_pc_ : output_pc_;
-        uint64_t scan_timestamp_ns =
-          in_current_scan ? decode_scan_timestamp_ns_ : output_scan_timestamp_ns_;
+        auto & frame = in_current_scan ? decode_frame_ : output_frame_;
+
+        if (frame.blockage_mask) {
+          frame.blockage_mask->update(
+            azimuth, channel_id, sensor_.get_blockage_type(unit.distance));
+        }
+
+        if (!point_is_valid) {
+          continue;
+        }
 
         NebulaPoint point;
         point.distance = distance;
         point.intensity = unit.reflectivity;
         point.time_stamp = get_point_time_relative(
-          scan_timestamp_ns, packet_timestamp_ns, block_offset + start_block_id, channel_id);
+          frame.scan_timestamp_ns, packet_timestamp_ns, block_offset + start_block_id, channel_id);
 
         point.return_type = static_cast<uint8_t>(return_type);
         point.channel = channel_id;
@@ -222,7 +251,7 @@ private:
         point.elevation = corrected_angle_data.elevation_rad;
 
         if (!mask_filter_ || !mask_filter_->excluded(point)) {
-          pc->emplace_back(point);
+          frame.pointcloud->emplace_back(point);
         }
       }
     }
@@ -249,6 +278,37 @@ private:
     return packet_to_scan_offset_ns + point_to_packet_offset_ns;
   }
 
+  DecodeFrame initialize_frame() const
+  {
+    DecodeFrame frame = {std::make_shared<NebulaPointCloud>(), 0, std::nullopt};
+    frame.pointcloud->reserve(SensorT::max_scan_buffer_points);
+
+    if (blockage_mask_plugin_) {
+      frame.blockage_mask = point_filters::BlockageMask(
+        SensorT::fov_mdeg.azimuth, blockage_mask_plugin_->get_bin_width_mdeg(),
+        SensorT::packet_t::n_channels);
+    }
+
+    return frame;
+  }
+
+  /// @brief Called when a scan is complete, published and then clears the output frame.
+  void on_scan_complete()
+  {
+    double scan_timestamp_s = static_cast<double>(output_frame_.scan_timestamp_ns) * 1e-9;
+
+    if (pointcloud_callback_) {
+      pointcloud_callback_(output_frame_.pointcloud, scan_timestamp_s);
+    }
+
+    if (blockage_mask_plugin_ && output_frame_.blockage_mask) {
+      blockage_mask_plugin_->callback_and_reset(
+        output_frame_.blockage_mask.value(), scan_timestamp_s);
+    }
+
+    output_frame_.pointcloud->clear();
+  }
+
 public:
   /// @brief Constructor
   /// @param sensor_configuration SensorConfiguration for this decoder
@@ -257,46 +317,69 @@ public:
     const std::shared_ptr<const HesaiSensorConfiguration> & sensor_configuration,
     const std::shared_ptr<const typename SensorT::angle_corrector_t::correction_data_t> &
       correction_data,
-    const std::shared_ptr<loggers::Logger> & logger)
+    const std::shared_ptr<loggers::Logger> & logger,
+    const std::shared_ptr<FunctionalSafetyDecoderTypedBase<typename SensorT::packet_t>> &
+      functional_safety_decoder,
+    const std::shared_ptr<PacketLossDetectorTypedBase<typename SensorT::packet_t>> &
+      packet_loss_detector,
+    std::shared_ptr<point_filters::BlockageMaskPlugin> blockage_mask_plugin)
   : sensor_configuration_(sensor_configuration),
     angle_corrector_(
       correction_data, sensor_configuration_->cloud_min_angle,
       sensor_configuration_->cloud_max_angle, sensor_configuration_->cut_angle),
+    functional_safety_decoder_(functional_safety_decoder),
+    packet_loss_detector_(packet_loss_detector),
     scan_cut_angles_(
       {deg2rad(sensor_configuration_->cloud_min_angle),
        deg2rad(sensor_configuration_->cloud_max_angle), deg2rad(sensor_configuration_->cut_angle)}),
-    logger_(logger)
+    logger_(logger),
+    blockage_mask_plugin_(std::move(blockage_mask_plugin)),
+    decode_frame_(initialize_frame()),
+    output_frame_(initialize_frame())
   {
-    decode_pc_ = std::make_shared<NebulaPointCloud>();
-    output_pc_ = std::make_shared<NebulaPointCloud>();
-
     if (sensor_configuration->downsample_mask_path) {
       mask_filter_ = point_filters::DownsampleMaskFilter(
         sensor_configuration->downsample_mask_path.value(), SensorT::fov_mdeg.azimuth,
         SensorT::peak_resolution_mdeg.azimuth, SensorT::packet_t::n_channels,
-        logger_->child("Downsample Mask"), true);
+        logger_->child("Downsample Mask"), true, sensor_.get_dither_transform());
     }
-
-    decode_pc_->reserve(SensorT::max_scan_buffer_points);
-    output_pc_->reserve(SensorT::max_scan_buffer_points);
   }
 
-  int unpack(const std::vector<uint8_t> & packet) override
+  void set_pointcloud_callback(pointcloud_callback_t callback) override
   {
+    pointcloud_callback_ = std::move(callback);
+  }
+
+  PacketDecodeResult unpack(const std::vector<uint8_t> & packet) override
+  {
+    util::Stopwatch decode_watch;
+
     if (!parse_packet(packet)) {
-      return -1;
+      return {PerformanceCounters{decode_watch.elapsed_ns(), 0}, DecodeError::PACKET_PARSE_FAILED};
     }
+
+    if (packet_loss_detector_) {
+      packet_loss_detector_->update(packet_);
+    }
+
+    // Even if the checksums of other parts of the packet are invalid, functional safety info
+    // is still checked. This is a null-op for sensors that do not support functional safety.
+    if (functional_safety_decoder_) {
+      functional_safety_decoder_->update(packet_);
+    }
+
+    // FYI: This is where the CRC would be checked. Since this caused performance issues in the
+    // past, and since the frame check sequence of the packet is already checked by the NIC, we skip
+    // it here.
 
     // This is the first scan, set scan timestamp to whatever packet arrived first
-    if (decode_scan_timestamp_ns_ == 0) {
-      decode_scan_timestamp_ns_ = hesai_packet::get_timestamp_ns(packet_) +
-                                  sensor_.get_earliest_point_time_offset_for_block(0, packet_);
+    if (decode_frame_.scan_timestamp_ns == 0) {
+      decode_frame_.scan_timestamp_ns =
+        hesai_packet::get_timestamp_ns(packet_) +
+        sensor_.get_earliest_point_time_offset_for_block(0, packet_);
     }
 
-    if (has_scanned_) {
-      output_pc_->clear();
-      has_scanned_ = false;
-    }
+    bool did_scan_complete = false;
 
     const size_t n_returns = hesai_packet::get_n_returns(packet_.tail.return_mode);
     for (size_t block_id = 0; block_id < SensorT::packet_t::n_blocks; block_id += n_returns) {
@@ -311,14 +394,15 @@ public:
           // In the non-360 deg case, if the cut angle and FoV end coincide, the old pointcloud has
           // already been swapped and published before the timestamp reset angle is reached. Thus,
           // the `decode` pointcloud is now empty and will be decoded to. Reset its timestamp.
-          decode_scan_timestamp_ns_ = new_scan_timestamp_ns;
+          decode_frame_.scan_timestamp_ns = new_scan_timestamp_ns;
+          decode_frame_.pointcloud->clear();
         } else {
-          /// When not cutting at the end of the FoV (i.e. the FoV is 360 deg or a cut occurs
-          /// somewhere within a non-360 deg FoV), the current scan is still being decoded to the
-          /// `decode` pointcloud but at the same time, points for the next pointcloud are arriving
-          /// and will be decoded to the `output` pointcloud (please forgive the naming for now).
-          /// Thus, reset the output pointcloud's timestamp.
-          output_scan_timestamp_ns_ = new_scan_timestamp_ns;
+          // When not cutting at the end of the FoV (i.e. the FoV is 360 deg or a cut occurs
+          // somewhere within a non-360 deg FoV), the current scan is still being decoded to the
+          // `decode` pointcloud but at the same time, points for the next pointcloud are arriving
+          // and will be decoded to the `output` pointcloud (please forgive the naming for now).
+          // Thus, reset the output pointcloud's timestamp.
+          output_frame_.scan_timestamp_ns = new_scan_timestamp_ns;
         }
       }
 
@@ -331,24 +415,27 @@ public:
 
       if (angle_corrector_.passed_emit_angle(last_azimuth_, block_azimuth)) {
         // The current `decode` pointcloud is ready for publishing, swap buffers to continue with
-        // the last `output` pointcloud as the `decode pointcloud.
-        std::swap(decode_pc_, output_pc_);
-        std::swap(decode_scan_timestamp_ns_, output_scan_timestamp_ns_);
-        has_scanned_ = true;
+        // the `output` pointcloud as the `decode` pointcloud.
+        std::swap(decode_frame_, output_frame_);
+        did_scan_complete = true;
       }
 
       last_azimuth_ = block_azimuth;
     }
 
-    return last_azimuth_;
-  }
+    uint64_t decode_duration_ns = decode_watch.elapsed_ns();
+    uint64_t callbacks_duration_ns = 0;
 
-  bool has_scanned() override { return has_scanned_; }
+    if (did_scan_complete) {
+      util::Stopwatch callback_watch;
+      on_scan_complete();
+      callbacks_duration_ns = callback_watch.elapsed_ns();
+    }
 
-  std::tuple<drivers::NebulaPointCloudPtr, double> get_pointcloud() override
-  {
-    double scan_timestamp_s = static_cast<double>(output_scan_timestamp_ns_) * 1e-9;
-    return std::make_pair(output_pc_, scan_timestamp_s);
+    PacketMetadata metadata;
+    metadata.packet_timestamp_ns = hesai_packet::get_timestamp_ns(packet_);
+    metadata.did_scan_complete = did_scan_complete;
+    return {PerformanceCounters{decode_duration_ns, callbacks_duration_ns}, metadata};
   }
 };
 

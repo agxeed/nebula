@@ -21,6 +21,9 @@
         "gnss_port": {
           "$ref": "sub/lidar_hesai.json#/definitions/gnss_port"
         },
+        "udp_socket_receive_buffer_size_bytes": {
+          "$ref": "sub/lidar_hesai.json#/definitions/udp_socket_receive_buffer_size_bytes"
+        },
         "packet_mtu_size": {
           "$ref": "sub/communication.json#/definitions/packet_mtu_size"
         },
@@ -66,6 +69,9 @@
         "calibration_file": {
           "$ref": "sub/lidar_hesai.json#/definitions/calibration_file"
         },
+        "calibration_download_enabled": {
+          "$ref": "sub/lidar_hesai.json#/definitions/calibration_download_enabled"
+        },
         "rotation_speed": {
           "$ref": "sub/lidar_hesai.json#/definitions/rotation_speed"
         },
@@ -104,6 +110,15 @@
         },
         "point_filters": {
           "$ref": "sub/misc.json#/definitions/point_filters"
+        },
+        "diagnostics": {
+          "$ref": "sub/lidar_hesai.json#/definitions/diagnostics",
+          "required": [
+            "pointcloud_publish_rate"
+          ]
+        },
+        "sync_diagnostics": {
+          "$ref": "sub/misc.json#/definitions/sync_diagnostics"
         }
       },
       "required": [
@@ -112,6 +127,7 @@
         "multicast_ip",
         "data_port",
         "gnss_port",
+        "udp_socket_receive_buffer_size_bytes",
         "packet_mtu_size",
         "launch_hw",
         "setup_sensor",
@@ -124,6 +140,7 @@
         "cut_angle",
         "sensor_model",
         "calibration_file",
+        "calibration_download_enabled",
         "rotation_speed",
         "return_mode",
         "ptp_profile",
@@ -132,7 +149,8 @@
         "ptp_switch_type",
         "ptp_lock_threshold",
         "retry_hw",
-        "dual_return_distance_threshold"
+        "dual_return_distance_threshold",
+        "diagnostics"
       ],
       "additionalProperties": false
     }

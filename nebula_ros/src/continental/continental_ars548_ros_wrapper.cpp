@@ -29,10 +29,7 @@ namespace nebula::ros
 ContinentalARS548RosWrapper::ContinentalARS548RosWrapper(const rclcpp::NodeOptions & options)
 : rclcpp::Node(
     "continental_ars548_ros_wrapper", rclcpp::NodeOptions(options).use_intra_process_comms(true)),
-  wrapper_status_(Status::NOT_INITIALIZED),
-  packet_queue_(3000),
-  hw_interface_wrapper_(),
-  decoder_wrapper_()
+  wrapper_status_(Status::NOT_INITIALIZED)
 {
   setvbuf(stdout, NULL, _IONBF, BUFSIZ);
 
@@ -54,15 +51,10 @@ ContinentalARS548RosWrapper::ContinentalARS548RosWrapper(const rclcpp::NodeOptio
 
   RCLCPP_DEBUG(get_logger(), "Starting stream");
 
-  decoder_thread_ = std::thread([this]() {
-    while (true) {
-      decoder_wrapper_->process_packet(packet_queue_.pop());
-    }
-  });
-
   if (launch_hw_) {
-    hw_interface_wrapper_->hw_interface()->register_packet_callback(std::bind(
-      &ContinentalARS548RosWrapper::receive_packet_callback, this, std::placeholders::_1));
+    hw_interface_wrapper_->hw_interface()->register_packet_callback(
+      std::bind(
+        &ContinentalARS548RosWrapper::receive_packet_callback, this, std::placeholders::_1));
     stream_start();
   } else {
     packets_sub_ = create_subscription<nebula_msgs::msg::NebulaPackets>(
@@ -98,6 +90,8 @@ nebula::Status ContinentalARS548RosWrapper::declare_and_get_sensor_config_params
   config.configuration_sensor_port =
     static_cast<uint16_t>(declare_parameter<int>("configuration_sensor_port", param_read_only()));
   config.use_sensor_time = declare_parameter<bool>("use_sensor_time", param_read_write());
+  config.radar_info_rate_subsample =
+    declare_parameter<int>("radar_info_rate_subsample", param_read_only());
   config.configuration_vehicle_length = static_cast<float>(
     declare_parameter<double>("configuration_vehicle_length", param_read_write()));
   config.configuration_vehicle_width = static_cast<float>(
@@ -106,6 +100,24 @@ nebula::Status ContinentalARS548RosWrapper::declare_and_get_sensor_config_params
     declare_parameter<double>("configuration_vehicle_height", param_read_write()));
   config.configuration_vehicle_wheelbase = static_cast<float>(
     declare_parameter<double>("configuration_vehicle_wheelbase", param_read_write()));
+  config.blockage_status_level_ok = static_cast<uint8_t>(
+    declare_parameter<int>("diagnostics.blockage.status_level.ok", param_read_write()));
+  config.blockage_status_level_warn = static_cast<uint8_t>(
+    declare_parameter<int>("diagnostics.blockage.status_level.warn", param_read_write()));
+  config.blockage_test_level_ok = static_cast<uint8_t>(
+    declare_parameter<int>("diagnostics.blockage.test_level.ok", param_read_write()));
+  config.blockage_test_level_warn = static_cast<uint8_t>(
+    declare_parameter<int>("diagnostics.blockage.test_level.warn", param_read_write()));
+  declare_parameter<bool>(
+    "diagnostic_updater.use_fqn", true, param_read_only());  // read by diagnostic_updater
+
+  {
+    auto sync_diagnostics_topic =
+      declare_parameter<std::string>("sync_diagnostics.topic", "", param_read_only());
+    if (!sync_diagnostics_topic.empty()) {
+      config.sync_diagnostics_topic.emplace(sync_diagnostics_topic);
+    }
+  }
 
   if (config.sensor_model == nebula::drivers::SensorModel::UNKNOWN) {
     return Status::INVALID_SENSOR_MODEL;
@@ -125,6 +137,13 @@ Status ContinentalARS548RosWrapper::validate_and_set_config(
   }
 
   if (new_config_ptr->frame_id.empty()) {
+    return Status::SENSOR_CONFIG_ERROR;
+  }
+
+  if (new_config_ptr->blockage_status_level_ok < new_config_ptr->blockage_status_level_warn) {
+    return Status::SENSOR_CONFIG_ERROR;
+  }
+  if (new_config_ptr->blockage_test_level_ok < new_config_ptr->blockage_test_level_warn) {
     return Status::SENSOR_CONFIG_ERROR;
   }
 
@@ -155,7 +174,7 @@ void ContinentalARS548RosWrapper::receive_packets_callback(
     nebula_packet_ptr->stamp = packet.stamp;
     nebula_packet_ptr->data = std::move(packet.data);
 
-    packet_queue_.push(std::move(nebula_packet_ptr));
+    decoder_wrapper_->process_packet(std::move(nebula_packet_ptr));
   }
 }
 
@@ -166,9 +185,7 @@ void ContinentalARS548RosWrapper::receive_packet_callback(
     return;
   }
 
-  if (!packet_queue_.try_push(std::move(msg_ptr))) {
-    RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 500, "Packet(s) dropped");
-  }
+  decoder_wrapper_->process_packet(std::move(msg_ptr));
 }
 
 Status ContinentalARS548RosWrapper::get_status()

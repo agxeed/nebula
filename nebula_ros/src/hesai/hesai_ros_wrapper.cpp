@@ -6,13 +6,17 @@
 
 #include <nebula_common/hesai/hesai_common.hpp>
 #include <nebula_common/nebula_common.hpp>
+#include <nebula_common/util/rate_limiter.hpp>
+#include <nebula_common/util/stopwatch.hpp>
 #include <nebula_common/util/string_conversions.hpp>
 #include <nebula_decoders/nebula_decoders_common/angles.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
+#include <limits>
 #include <memory>
 #include <sstream>
 #include <stdexcept>
@@ -28,9 +32,8 @@ HesaiRosWrapper::HesaiRosWrapper(const rclcpp::NodeOptions & options)
 : rclcpp::Node("hesai_ros_wrapper", rclcpp::NodeOptions(options).use_intra_process_comms(true)),
   wrapper_status_(Status::NOT_INITIALIZED),
   sensor_cfg_ptr_(nullptr),
-  hw_interface_wrapper_(),
-  hw_monitor_wrapper_(),
-  decoder_wrapper_()
+  diagnostic_updater_general_((declare_parameter<bool>("diagnostic_updater.use_fqn", true), this)),
+  diagnostic_updater_functional_safety_(this)
 {
   setvbuf(stdout, nullptr, _IONBF, BUFSIZ);
 
@@ -42,6 +45,12 @@ HesaiRosWrapper::HesaiRosWrapper(const rclcpp::NodeOptions & options)
 
   RCLCPP_INFO_STREAM(get_logger(), "Sensor Configuration: " << *sensor_cfg_ptr_);
 
+  diagnostic_updater_functional_safety_.setPeriod(
+    std::chrono::duration<double>(1.0 / drivers::rpm2hz(sensor_cfg_ptr_->rotation_speed)));
+
+  diagnostic_updater_general_.setHardwareID(sensor_cfg_ptr_->frame_id);
+  diagnostic_updater_functional_safety_.setHardwareID(sensor_cfg_ptr_->frame_id);
+
   launch_hw_ = declare_parameter<bool>("launch_hw", param_read_only());
   bool use_udp_only = declare_parameter<bool>("udp_only", param_read_only());
 
@@ -52,17 +61,23 @@ HesaiRosWrapper::HesaiRosWrapper(const rclcpp::NodeOptions & options)
       "disabled.");
   }
 
+  initialize_sync_tooling(*sensor_cfg_ptr_);
+
   if (launch_hw_) {
     hw_interface_wrapper_.emplace(this, sensor_cfg_ptr_, use_udp_only);
     if (!use_udp_only) {  // hardware monitor requires TCP connection
-      hw_monitor_wrapper_.emplace(this, hw_interface_wrapper_->hw_interface(), sensor_cfg_ptr_);
+      auto sync_tooling_worker = sync_tooling_plugin_ ? sync_tooling_plugin_->worker : nullptr;
+      hw_monitor_wrapper_.emplace(
+        this, diagnostic_updater_general_, hw_interface_wrapper_->hw_interface(), sensor_cfg_ptr_,
+        sync_tooling_worker);
     }
   }
 
-  bool force_load_caibration_from_file =
-    use_udp_only;  // Downloading from device requires TCP connection
+  // Downloading from device requires TCP connection and is thus implicitly disabled for udp-only
+  bool force_load_calibration_from_file =
+    use_udp_only || !sensor_cfg_ptr_->calibration_download_enabled;
   auto calibration_result =
-    get_calibration_data(sensor_cfg_ptr_->calibration_path, force_load_caibration_from_file);
+    get_calibration_data(sensor_cfg_ptr_->calibration_path, force_load_calibration_from_file);
   if (!calibration_result.has_value()) {
     throw std::runtime_error(
       "No valid calibration found: " + util::to_string(calibration_result.error()));
@@ -80,13 +95,17 @@ HesaiRosWrapper::HesaiRosWrapper(const rclcpp::NodeOptions & options)
     }
   }
 
-  decoder_wrapper_.emplace(this, sensor_cfg_ptr_, calibration_result.value(), launch_hw_);
+  decoder_wrapper_.emplace(
+    this, sensor_cfg_ptr_, calibration_result.value(), diagnostic_updater_functional_safety_,
+    launch_hw_);
 
   RCLCPP_DEBUG(get_logger(), "Starting stream");
 
   if (launch_hw_) {
     hw_interface_wrapper_->hw_interface()->register_scan_callback(
-      std::bind(&HesaiRosWrapper::receive_cloud_packet_callback, this, std::placeholders::_1));
+      std::bind(
+        &HesaiRosWrapper::receive_cloud_packet_callback, this, std::placeholders::_1,
+        std::placeholders::_2));
     stream_start();
   } else {
     packets_sub_ = create_subscription<pandar_msgs::msg::PandarScan>(
@@ -101,6 +120,18 @@ HesaiRosWrapper::HesaiRosWrapper(const rclcpp::NodeOptions & options)
   // once for each declaration
   parameter_event_cb_ = add_on_set_parameters_callback(
     std::bind(&HesaiRosWrapper::on_parameter_change, this, std::placeholders::_1));
+}
+
+void HesaiRosWrapper::initialize_sync_tooling(const drivers::HesaiSensorConfiguration & config)
+{
+  if (!config.sync_diagnostics_topic) {
+    return;
+  }
+
+  auto sync_tooling_worker = std::make_shared<SyncToolingWorker>(
+    this, *config.sync_diagnostics_topic, config.frame_id, config.ptp_domain);
+
+  sync_tooling_plugin_.emplace(SyncToolingPlugin{sync_tooling_worker, util::RateLimiter(100ms)});
 }
 
 nebula::Status HesaiRosWrapper::declare_and_get_sensor_config_params()
@@ -118,6 +149,14 @@ nebula::Status HesaiRosWrapper::declare_and_get_sensor_config_params()
   config.multicast_ip = declare_parameter<std::string>("multicast_ip", param_read_only());
   config.data_port = declare_parameter<uint16_t>("data_port", param_read_only());
   config.gnss_port = declare_parameter<uint16_t>("gnss_port", param_read_only());
+  {
+    rcl_interfaces::msg::ParameterDescriptor descriptor = param_read_only();
+    descriptor.description = "Kernel UDP receive buffer size (SO_RCVBUF) in bytes for data socket.";
+    // As per `man 7 setsockopt`, the minimum value is 256 bytes.
+    descriptor.integer_range = int_range(256, std::numeric_limits<int32_t>::max(), 1);
+    config.udp_socket_receive_buffer_size_bytes = static_cast<size_t>(
+      declare_parameter<int64_t>("udp_socket_receive_buffer_size_bytes", descriptor));
+  }
   config.frame_id = declare_parameter<std::string>("frame_id", param_read_write());
 
   {
@@ -142,6 +181,13 @@ nebula::Status HesaiRosWrapper::declare_and_get_sensor_config_params()
   config.min_range = declare_parameter<double>("min_range", param_read_write());
   config.max_range = declare_parameter<double>("max_range", param_read_write());
   config.packet_mtu_size = declare_parameter<uint16_t>("packet_mtu_size", param_read_only());
+
+  config.hires_mode = false;
+  if (
+    config.sensor_model == drivers::SensorModel::HESAI_PANDAR128_E4X ||
+    config.sensor_model == drivers::SensorModel::HESAI_PANDAR128_E3X) {
+    config.hires_mode = this->declare_parameter<bool>("hires_mode", param_read_write());
+  }
 
   {
     rcl_interfaces::msg::ParameterDescriptor descriptor = param_read_write();
@@ -176,6 +222,8 @@ nebula::Status HesaiRosWrapper::declare_and_get_sensor_config_params()
   std::string calibration_parameter_name = get_calibration_parameter_name(config.sensor_model);
   config.calibration_path =
     declare_parameter<std::string>(calibration_parameter_name, param_read_write());
+  config.calibration_download_enabled =
+    declare_parameter<bool>("calibration_download_enabled", param_read_only());
 
   auto ptp_profile = declare_parameter<std::string>("ptp_profile", param_read_only());
   config.ptp_profile = drivers::ptp_profile_from_string(ptp_profile);
@@ -216,6 +264,52 @@ nebula::Status HesaiRosWrapper::declare_and_get_sensor_config_params()
       config.downsample_mask_path = std::nullopt;
     } else {
       config.downsample_mask_path = downsample_mask_path;
+    }
+  }
+
+  {
+    auto blockage_mask_horizontal_bin_size_mdeg = declare_parameter<int64_t>(
+      "blockage_mask_output.horizontal_bin_size_mdeg", 0, param_read_write());
+    if (blockage_mask_horizontal_bin_size_mdeg <= 0) {
+      config.blockage_mask_horizontal_bin_size_mdeg = std::nullopt;
+    } else {
+      config.blockage_mask_horizontal_bin_size_mdeg = blockage_mask_horizontal_bin_size_mdeg;
+    }
+  }
+
+  {
+    auto sync_diagnostics_topic =
+      declare_parameter<std::string>("sync_diagnostics.topic", "", param_read_only());
+    if (!sync_diagnostics_topic.empty()) {
+      config.sync_diagnostics_topic.emplace(sync_diagnostics_topic);
+    }
+  }
+
+  if (supports_functional_safety(config.sensor_model)) {
+    std::string mode = declare_parameter<std::string>(
+      "diagnostics.functional_safety.mode", "basic", param_read_only());
+    if (mode == "basic") {
+      config.functional_safety = std::nullopt;
+    } else if (mode == "advanced") {
+      config.functional_safety = drivers::AdvancedFunctionalSafetyConfiguration();
+      config.functional_safety->error_definitions_path = declare_parameter<std::string>(
+        "diagnostics.functional_safety.error_definitions_path", param_read_only());
+
+      rcl_interfaces::msg::ParameterDescriptor descriptor = param_read_only();
+      descriptor.integer_range = int_range(0, 65535, 1);
+      auto ignored_error_codes = declare_parameter<std::vector<int64_t>>(
+        "diagnostics.functional_safety.ignored_error_codes", {}, descriptor);
+
+      auto ignored_error_codes_uint16 = std::vector<uint16_t>();
+      for (const auto & error_code : ignored_error_codes) {
+        ignored_error_codes_uint16.push_back(static_cast<uint16_t>(error_code));
+      }
+      config.functional_safety->ignored_error_codes = ignored_error_codes_uint16;
+    } else {
+      RCLCPP_ERROR_STREAM(
+        get_logger(),
+        "Invalid functional safety mode: " << mode << ". Valid modes are 'basic' and 'advanced'.");
+      return Status::SENSOR_CONFIG_ERROR;
     }
   }
 
@@ -286,6 +380,15 @@ Status HesaiRosWrapper::validate_and_set_config(
     return Status::SENSOR_CONFIG_ERROR;
   }
 
+  if (
+    new_config->functional_safety &&
+    !std::filesystem::exists(new_config->functional_safety->error_definitions_path)) {
+    RCLCPP_ERROR_STREAM(
+      get_logger(), "Functional safety error definitions not found: "
+                      << new_config->functional_safety->error_definitions_path);
+    return Status::SENSOR_CONFIG_ERROR;
+  }
+
   if (hw_interface_wrapper_) {
     hw_interface_wrapper_->on_config_change(new_config);
   }
@@ -303,6 +406,7 @@ Status HesaiRosWrapper::validate_and_set_config(
 void HesaiRosWrapper::receive_scan_message_callback(
   std::unique_ptr<pandar_msgs::msg::PandarScan> scan_msg)
 {
+  util::Stopwatch receive_watch;
   if (hw_interface_wrapper_) {
     RCLCPP_ERROR_THROTTLE(
       get_logger(), *get_clock(), 1000,
@@ -315,7 +419,10 @@ void HesaiRosWrapper::receive_scan_message_callback(
     nebula_pkt_ptr->stamp = pkt.stamp;
     std::copy(pkt.data.begin(), pkt.data.end(), std::back_inserter(nebula_pkt_ptr->data));
 
-    decoder_wrapper_->process_cloud_packet(std::move(nebula_pkt_ptr));
+    decoder_wrapper_->process_cloud_packet(std::move(nebula_pkt_ptr), receive_watch.elapsed_ns());
+    // This reset is placed at the end of the loop, so that in the first iteration, the possible
+    // logging overhead from the statements before the loop is included in the measurement.
+    receive_watch.reset();
   }
 }
 
@@ -357,6 +464,8 @@ rcl_interfaces::msg::SetParametersResult HesaiRosWrapper::on_parameter_change(
     get_calibration_parameter_name(sensor_cfg_ptr_->sensor_model);
   std::string downsample_mask_path = new_cfg.downsample_mask_path.value_or("");
 
+  int64_t blockage_mask_horizontal_bin_size_mdeg = 0;
+
   bool got_any =
     get_param(p, "return_mode", return_mode) | get_param(p, "frame_id", new_cfg.frame_id) |
     get_param(p, "sync_angle", new_cfg.sync_angle) | get_param(p, "cut_angle", new_cfg.cut_angle) |
@@ -365,8 +474,11 @@ rcl_interfaces::msg::SetParametersResult HesaiRosWrapper::on_parameter_change(
     get_param(p, "cloud_min_angle", new_cfg.cloud_min_angle) |
     get_param(p, "cloud_max_angle", new_cfg.cloud_max_angle) |
     get_param(p, "dual_return_distance_threshold", new_cfg.dual_return_distance_threshold) |
+    get_param(p, "hires_mode", new_cfg.hires_mode) |
     get_param(p, calibration_parameter_name, new_cfg.calibration_path) |
-    get_param(p, "point_filters.downsample_mask.path", downsample_mask_path);
+    get_param(p, "point_filters.downsample_mask.path", downsample_mask_path) |
+    get_param(
+      p, "blockage_mask_output.horizontal_bin_size_mdeg", blockage_mask_horizontal_bin_size_mdeg);
 
   // Currently, all of the sub-wrappers read-only parameters, so they do not be queried for updates
 
@@ -374,7 +486,7 @@ rcl_interfaces::msg::SetParametersResult HesaiRosWrapper::on_parameter_change(
     return rcl_interfaces::build<SetParametersResult>().successful(true).reason("");
   }
 
-  if (return_mode.empty()) {
+  if (!return_mode.empty()) {
     new_cfg.return_mode =
       nebula::drivers::return_mode_from_string_hesai(return_mode, sensor_cfg_ptr_->sensor_model);
   }
@@ -383,6 +495,12 @@ rcl_interfaces::msg::SetParametersResult HesaiRosWrapper::on_parameter_change(
     new_cfg.downsample_mask_path = downsample_mask_path;
   } else {
     new_cfg.downsample_mask_path = std::nullopt;
+  }
+
+  if (blockage_mask_horizontal_bin_size_mdeg <= 0) {
+    new_cfg.blockage_mask_horizontal_bin_size_mdeg = std::nullopt;
+  } else {
+    new_cfg.blockage_mask_horizontal_bin_size_mdeg = blockage_mask_horizontal_bin_size_mdeg;
   }
 
   // ////////////////////////////////////////
@@ -448,7 +566,9 @@ rcl_interfaces::msg::SetParametersResult HesaiRosWrapper::on_parameter_change(
   return rcl_interfaces::build<SetParametersResult>().successful(true).reason("");
 }
 
-void HesaiRosWrapper::receive_cloud_packet_callback(const std::vector<uint8_t> & packet)
+void HesaiRosWrapper::receive_cloud_packet_callback(
+  const std::vector<uint8_t> & packet,
+  const drivers::connections::UdpSocket::RxMetadata & receive_metadata)
 {
   if (!decoder_wrapper_ || decoder_wrapper_->status() != Status::OK) {
     return;
@@ -463,7 +583,21 @@ void HesaiRosWrapper::receive_cloud_packet_callback(const std::vector<uint8_t> &
   msg_ptr->stamp.nanosec = static_cast<int>(timestamp_ns % 1'000'000'000);
   msg_ptr->data = packet;
 
-  decoder_wrapper_->process_cloud_packet(std::move(msg_ptr));
+  auto decode_result = decoder_wrapper_->process_cloud_packet(
+    std::move(msg_ptr), receive_metadata.packet_perf_counters.receive_duration_ns);
+
+  if (
+    decode_result.metadata_or_error.has_value() && sync_tooling_plugin_ &&
+    receive_metadata.timestamp_ns) {
+    const auto & decode_metadata = decode_result.metadata_or_error.value();
+
+    sync_tooling_plugin_->rate_limiter.with_rate_limit(
+      *receive_metadata.timestamp_ns, [this, &decode_metadata, &receive_metadata]() {
+        int64_t clock_diff = static_cast<int64_t>(*receive_metadata.timestamp_ns) -
+                             static_cast<int64_t>(decode_metadata.packet_timestamp_ns);
+        sync_tooling_plugin_->worker->submit_clock_diff_measurement(clock_diff);
+      });
+  }
 }
 
 std::string HesaiRosWrapper::get_calibration_parameter_name(drivers::SensorModel model) const

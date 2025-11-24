@@ -18,6 +18,7 @@
 #include "nebula_decoders/nebula_decoders_hesai/decoders/hesai_sensor.hpp"
 #include "nebula_decoders/nebula_decoders_hesai/decoders/pandar_128e3x.hpp"
 
+#include <iostream>
 #include <vector>
 
 namespace nebula::drivers
@@ -41,6 +42,17 @@ using Packet128E4X = Packet128E3X;
 class Pandar128E4X : public HesaiSensor<hesai_packet::Packet128E4X>
 {
 private:
+  enum BlockageType : uint16_t {
+    /// There was no laser emission, this return is a placeholder
+    VALID_NO_EMISSION = 0,
+    /// The return is too close (within 0.3m of the sensor)
+    INVALID_TOO_CLOSE = 1,
+    /// The return is too close for a far-field channel (within 1.4m of the sensor)
+    INVALID_TOO_CLOSE_FAR_FIELD = 2,
+    /// The return is too far, has been absorbed completely, or is filtered out due to noise etc.
+    INVALID_NO_RETURN = 3,
+  };
+
   enum OperationalState { HIGH_RESOLUTION = 0, STANDARD = 1 };
 
   static constexpr int firing_time_offset_static_ns[128] = {
@@ -133,6 +145,52 @@ public:
     }
 
     return return_type;
+  }
+
+  [[nodiscard]] point_filters::DitherTransform get_dither_transform() const override
+  {
+    return [](size_t x, size_t y) {
+      // Dithering in hi-res mode is done in groups of 4 channels, with the first and second
+      // pair being alternated per block (cycle length 2) like this (* is active, . is inactive):
+      // channel |  block
+      //         | 1 2 3 4
+      // --------+--------
+      //     y+0 | * . * .
+      //     y+1 | * . * .
+      //     y+2 | . * . *
+      //     y+3 | . * . *
+
+      const size_t pair_n_channels = 2;
+      const size_t group_n_channels = 4;
+      const size_t cycle_n_blocks = 2;
+
+      // The dithering pattern is 2 blocks wide and 4 channels tall, quantize the positions in
+      // each 2x4 tile to the same position (x/2*2, y/4*4). This eliminates flicker that would
+      // otherwise happen.
+      size_t x_quant = (x / cycle_n_blocks * cycle_n_blocks);
+      size_t y_quant = (y / group_n_channels * group_n_channels);
+
+      // In each channel pair, the normal 45deg dithering offset can be applied normally
+      // as the relative position within each pair remains constant, regardless of the dithering
+      // cycle.
+      size_t y_offset = (y % pair_n_channels);
+
+      return x_quant + y_quant + y_offset;
+    };
+  }
+
+  [[nodiscard]] point_filters::BlockageState get_blockage_type(uint16_t raw_distance) const override
+  {
+    switch (raw_distance) {
+      case BlockageType::VALID_NO_EMISSION:
+      case BlockageType::INVALID_TOO_CLOSE_FAR_FIELD:
+      case BlockageType::INVALID_NO_RETURN:
+        return point_filters::BlockageState::UNSURE;
+      case BlockageType::INVALID_TOO_CLOSE:
+        return point_filters::BlockageState::BLOCKAGE;
+      default:
+        return point_filters::BlockageState::NO_BLOCKAGE;
+    }
   }
 };
 

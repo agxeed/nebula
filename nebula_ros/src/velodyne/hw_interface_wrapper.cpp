@@ -2,6 +2,8 @@
 
 #include "nebula_ros/velodyne/hw_interface_wrapper.hpp"
 
+#include "nebula_ros/common/rclcpp_logger.hpp"
+
 #include <nebula_common/util/string_conversions.hpp>
 
 #include <memory>
@@ -12,7 +14,9 @@ namespace nebula::ros
 VelodyneHwInterfaceWrapper::VelodyneHwInterfaceWrapper(
   rclcpp::Node * const parent_node,
   std::shared_ptr<const nebula::drivers::VelodyneSensorConfiguration> & config, bool use_udp_only)
-: hw_interface_(new nebula::drivers::VelodyneHwInterface()),
+: hw_interface_(
+    std::make_shared<drivers::VelodyneHwInterface>(
+      drivers::loggers::RclcppLogger(parent_node->get_logger()).child("HwInterface"))),
   logger_(parent_node->get_logger().get_child("HwInterfaceWrapper")),
   status_(Status::NOT_INITIALIZED),
   use_udp_only_(use_udp_only)

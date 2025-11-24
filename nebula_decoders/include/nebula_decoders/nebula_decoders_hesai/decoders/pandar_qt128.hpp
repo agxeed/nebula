@@ -14,8 +14,11 @@
 
 #pragma once
 
+#include "nebula_decoders/nebula_decoders_hesai/decoders/functional_safety.hpp"
 #include "nebula_decoders/nebula_decoders_hesai/decoders/hesai_packet.hpp"
 #include "nebula_decoders/nebula_decoders_hesai/decoders/hesai_sensor.hpp"
+
+#include <nebula_common/util/bitfield.hpp>
 
 namespace nebula::drivers
 {
@@ -35,20 +38,81 @@ struct TailQT128C2X
   DateTime<1900> date_time;
   uint32_t timestamp;
   uint8_t factory_information;
-
-  /* Ignored optional fields */
-
-  // uint32_t udp_sequence;
-  // uint32_t crc_tail;
+  uint32_t udp_sequence;
+  uint32_t crc_tail;
 };
+
+struct FunctionalSafetyQT128C2X
+{
+  static constexpr uint64_t update_cycle_ns = 5'000'000;
+
+  enum class LidarState : uint8_t {
+    INITIALIZATION = 0,
+    NORMAL = 1,
+    WARNING = 2,
+    PERFORMANCE_DEGRADATION = 3,
+    OUTPUT_UNTRUSTED = 4,
+  };
+
+  enum class FaultCodeType : uint8_t {
+    NO_FAULT = 0,
+    CURRENT_FAULT = 1,
+    PAST_FAULT = 2,
+  };
+
+  uint8_t fs_version;
+
+  uint8_t bitfield1;
+  BITFIELD_ACCESSOR(LidarState, lidar_state, 5, 7, bitfield1)
+  BITFIELD_ACCESSOR(FaultCodeType, fault_code_type, 3, 4, bitfield1)
+  BITFIELD_ACCESSOR(uint8_t, rolling_counter, 0, 2, bitfield1)
+
+  uint8_t bitfield2;
+  BITFIELD_ACCESSOR(uint8_t, total_fault_code_num, 4, 7, bitfield2)
+  BITFIELD_ACCESSOR(uint8_t, fault_code_id, 0, 3, bitfield2)
+
+  uint16_t fault_code;
+  uint8_t reserved1[8];
+  uint32_t crc_fs;
+
+  [[nodiscard]] FunctionalSafetySeverity severity() const
+  {
+    switch (lidar_state()) {
+      case LidarState::INITIALIZATION:
+      case LidarState::NORMAL:
+      case LidarState::WARNING:
+        return FunctionalSafetySeverity::OK;
+      case LidarState::PERFORMANCE_DEGRADATION:
+        return FunctionalSafetySeverity::WARNING;
+      case LidarState::OUTPUT_UNTRUSTED:
+      default:
+        return FunctionalSafetySeverity::ERROR;
+    }
+  }
+
+  friend bool operator==(const FunctionalSafetyQT128C2X & lhs, const FunctionalSafetyQT128C2X & rhs)
+  {
+    return lhs.lidar_state() == rhs.lidar_state() &&
+           lhs.fault_code_type() == rhs.fault_code_type() &&
+           lhs.rolling_counter() == rhs.rolling_counter() &&
+           lhs.total_fault_code_num() == rhs.total_fault_code_num() &&
+           lhs.fault_code == rhs.fault_code;
+  }
+
+  friend bool operator!=(const FunctionalSafetyQT128C2X & lhs, const FunctionalSafetyQT128C2X & rhs)
+  {
+    return !(lhs == rhs);
+  }
+};
+
+static_assert(sizeof(FunctionalSafetyQT128C2X) == 17);
 
 struct PacketQT128C2X : public PacketBase<2, 128, 2, 100>
 {
-  using body_t = Body<Block<Unit4B, PacketQT128C2X::n_channels>, PacketQT128C2X::n_blocks>;
+  using body_t = BodyWithCrc<Block<Unit4B, PacketQT128C2X::n_channels>, PacketQT128C2X::n_blocks>;
   Header12B header;
   body_t body;
-  uint32_t crc_body;
-  FunctionalSafety fs;
+  FunctionalSafetyQT128C2X fs;
   TailQT128C2X tail;
 
   /* Ignored optional fields */

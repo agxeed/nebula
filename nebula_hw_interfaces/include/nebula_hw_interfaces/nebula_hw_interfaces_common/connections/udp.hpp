@@ -19,6 +19,7 @@
 #define _GNU_SOURCE
 #endif
 
+#include <nebula_common/util/errno.hpp>
 #include <nebula_common/util/expected.hpp>
 
 #include <arpa/inet.h>
@@ -51,15 +52,8 @@ namespace nebula::drivers::connections
 
 class SocketError : public std::exception
 {
-  static constexpr size_t gnu_max_strerror_length = 1024;
-
 public:
-  explicit SocketError(int err_no)
-  {
-    std::array<char, gnu_max_strerror_length> msg_buf;
-    std::string_view msg = strerror_r(err_no, msg_buf.data(), msg_buf.size());
-    what_ = std::string{msg};
-  }
+  explicit SocketError(int err_no) : what_{util::errno_to_string(err_no)} {}
 
   explicit SocketError(const std::string_view & msg) : what_(msg) {}
 
@@ -75,11 +69,20 @@ public:
   explicit UsageError(const std::string & msg) : std::runtime_error(msg) {}
 };
 
+inline util::expected<in_addr, UsageError> parse_ip(const std::string & ip)
+{
+  in_addr parsed_addr{};
+  bool valid = inet_aton(ip.c_str(), &parsed_addr);
+  if (!valid) return UsageError("Invalid IP address given");
+  return parsed_addr;
+}
+
 class UdpSocket
 {
   struct Endpoint
   {
     in_addr ip;
+    /// In host byte order.
     uint16_t port;
   };
 
@@ -95,7 +98,7 @@ class UdpSocket
 
     SockFd(const SockFd &) = delete;
     SockFd & operator=(const SockFd &) = delete;
-    SockFd & operator=(SockFd && other)
+    SockFd & operator=(SockFd && other) noexcept
     {
       std::swap(sock_fd_, other.sock_fd_);
       return *this;
@@ -126,15 +129,29 @@ class UdpSocket
     size_t buffer_size{1500};
     Endpoint host;
     std::optional<in_addr> multicast_ip;
-    std::optional<Endpoint> sender;
+    std::optional<Endpoint> sender_filter;
+    std::optional<Endpoint> send_to;
   };
 
   struct MsgBuffers
   {
-    msghdr msg{};
+    explicit MsgBuffers(std::vector<uint8_t> & receive_buffer)
+    {
+      iov.iov_base = receive_buffer.data();
+      iov.iov_len = receive_buffer.size();
+
+      msg.msg_iov = &iov;
+      msg.msg_iovlen = 1;
+      msg.msg_control = control.data();
+      msg.msg_controllen = control.size();
+      msg.msg_name = &sender_addr;
+      msg.msg_namelen = sizeof(sender_addr);
+    }
+
     iovec iov{};
-    std::array<std::byte, 1024> control;
-    sockaddr_in sender_addr;
+    std::array<std::byte, 1024> control{};
+    sockaddr_in sender_addr{};
+    msghdr msg{};
   };
 
   class DropMonitor
@@ -174,7 +191,7 @@ public:
      */
     Builder(const std::string & host_ip, uint16_t host_port)
     {
-      in_addr host_in_addr = parse_ip_or_throw(host_ip);
+      in_addr host_in_addr = parse_ip(host_ip).value_or_throw();
       if (host_in_addr.s_addr == INADDR_BROADCAST)
         throw UsageError("Do not bind to broadcast IP. Bind to 0.0.0.0 or a specific IP instead.");
 
@@ -201,7 +218,19 @@ public:
      */
     Builder && limit_to_sender(const std::string & sender_ip, uint16_t sender_port)
     {
-      config_.sender.emplace(Endpoint{parse_ip_or_throw(sender_ip), sender_port});
+      config_.sender_filter.emplace(Endpoint{parse_ip(sender_ip).value_or_throw(), sender_port});
+      return std::move(*this);
+    }
+
+    /**
+     * @brief Set the destination to send packets to.
+     *
+     * @param dest_ip The destination IP address.
+     * @param dest_port The destination port.
+     */
+    Builder && set_send_destination(const std::string & dest_ip, uint16_t dest_port)
+    {
+      config_.send_to.emplace(Endpoint{parse_ip(dest_ip).value_or_throw(), dest_port});
       return std::move(*this);
     }
 
@@ -243,7 +272,7 @@ public:
     {
       if (config_.multicast_ip)
         throw UsageError("Only one multicast group can be joined by this socket");
-      ip_mreq mreq{parse_ip_or_throw(group_ip), config_.host.ip};
+      ip_mreq mreq{parse_ip(group_ip).value_or_throw(), config_.host.ip};
 
       sock_fd_.setsockopt(IPPROTO_IP, IP_ADD_MEMBERSHIP, mreq).value_or_throw();
       config_.multicast_ip.emplace(mreq.imr_multiaddr);
@@ -251,7 +280,7 @@ public:
     }
 
     /**
-     * @brief Set the interval at which the socket polls for new data. THis should be longer than
+     * @brief Set the interval at which the socket polls for new data. This should be longer than
      * the expected interval of packets arriving in order to not poll unnecessarily often, and
      * should be shorter than the acceptable time delay for `unsubscribe()`. The `unsubscribe()`
      * function blocks up to one full poll interval before returning.
@@ -277,7 +306,7 @@ public:
       addr.sin_port = htons(config_.host.port);
       addr.sin_addr = config_.multicast_ip ? *config_.multicast_ip : config_.host.ip;
 
-      int result = ::bind(sock_fd_.get(), (struct sockaddr *)&addr, sizeof(addr));
+      int result = ::bind(sock_fd_.get(), (sockaddr *)&addr, sizeof(addr));
       if (result == -1) throw SocketError(errno);
 
       return UdpSocket{std::move(sock_fd_), config_};
@@ -288,14 +317,23 @@ public:
     SocketConfig config_;
   };
 
+  struct PerfCounters
+  {
+    uint64_t receive_duration_ns{0};
+    uint64_t n_woken_without_data{0};
+    uint64_t n_woken_by_wrong_sender{0};
+  };
+
   struct RxMetadata
   {
     std::optional<uint64_t> timestamp_ns;
-    uint64_t drops_since_last_receive{0};
+    uint64_t n_packets_dropped_since_last_receive{0};
+    PerfCounters packet_perf_counters{};
     bool truncated;
   };
 
-  using callback_t = std::function<void(const std::vector<uint8_t> &, const RxMetadata &)>;
+  using callback_t =
+    std::function<void(const std::vector<uint8_t> & data, const RxMetadata & metadata)>;
 
   /**
    * @brief Register a callback for processing received packets and start the receiver thread. The
@@ -327,12 +365,33 @@ public:
     return *this;
   }
 
+  /**
+   * @brief Send a datagram to the destination set in `set_send_destination()`.
+   *
+   * @param data The data to send
+   * @throw UsageError If no destination has been set via `set_send_destination()`
+   * @throw SocketError If the send operation fails
+   */
+  void send(const std::vector<uint8_t> & data)
+  {
+    if (!config_.send_to) throw UsageError("No destination set");
+
+    sockaddr_in dest_addr{};
+    dest_addr.sin_family = AF_INET;
+    dest_addr.sin_port = htons(config_.send_to->port);
+    dest_addr.sin_addr = config_.send_to->ip;
+
+    ssize_t result = sendto(
+      sock_fd_.get(), data.data(), data.size(), 0, (sockaddr *)&dest_addr, sizeof(dest_addr));
+
+    if (result == -1) throw SocketError(errno);
+  }
+
   UdpSocket(const UdpSocket &) = delete;
   UdpSocket(UdpSocket && other)
   : sock_fd_((other.unsubscribe(), std::move(other.sock_fd_))),
-    poll_fd_(std::move(other.poll_fd_)),
-    config_(std::move(other.config_)),
-    drop_monitor_(std::move(other.drop_monitor_))
+    poll_fd_(other.poll_fd_),
+    config_(other.config_)
   {
     if (other.callback_) subscribe(std::move(other.callback_));
   };
@@ -350,13 +409,23 @@ private:
     running_ = true;
     receive_thread_ = std::thread([this]() {
       std::vector<uint8_t> buffer;
+      DropMonitor drop_monitor{};
+      PerfCounters current_packet_perf_counters{};
+
       while (running_) {
         auto data_available = is_data_available();
+
+        auto t_start = std::chrono::steady_clock::now();
         if (!data_available.has_value()) throw SocketError(data_available.error());
-        if (!data_available.value()) continue;
+        if (!data_available.value()) {
+          current_packet_perf_counters.n_woken_without_data++;
+          current_packet_perf_counters.receive_duration_ns +=
+            (std::chrono::steady_clock::now() - t_start).count();
+          continue;
+        }
 
         buffer.resize(config_.buffer_size);
-        auto msg_header = make_msg_header(buffer);
+        MsgBuffers msg_header{buffer};
 
         // As per `man recvmsg`, zero-length datagrams are permitted and valid. Since the socket is
         // blocking, a recv_result of 0 means we received a valid 0-length datagram.
@@ -364,19 +433,31 @@ private:
         if (recv_result < 0) throw SocketError(errno);
         size_t untruncated_packet_length = recv_result;
 
-        if (!is_accepted_sender(msg_header.sender_addr)) continue;
+        if (!is_accepted_sender(msg_header.sender_addr)) {
+          current_packet_perf_counters.n_woken_by_wrong_sender++;
+          current_packet_perf_counters.receive_duration_ns +=
+            (std::chrono::steady_clock::now() - t_start).count();
+          continue;
+        }
 
         RxMetadata metadata;
-        get_receive_metadata(msg_header.msg, metadata);
+        get_receive_metadata(msg_header.msg, metadata, drop_monitor);
         metadata.truncated = untruncated_packet_length > config_.buffer_size;
 
         buffer.resize(std::min(config_.buffer_size, untruncated_packet_length));
+
+        current_packet_perf_counters.receive_duration_ns +=
+          (std::chrono::steady_clock::now() - t_start).count();
+
+        metadata.packet_perf_counters = current_packet_perf_counters;
+        current_packet_perf_counters = {};
+
         callback_(buffer, metadata);
       }
     });
   }
 
-  void get_receive_metadata(msghdr & msg, RxMetadata & inout_metadata)
+  void get_receive_metadata(msghdr & msg, RxMetadata & metadata, DropMonitor & drop_monitor)
   {
     for (cmsghdr * cmsg = CMSG_FIRSTHDR(&msg); cmsg != nullptr; cmsg = CMSG_NXTHDR(&msg, cmsg)) {
       if (cmsg->cmsg_level != SOL_SOCKET) continue;
@@ -385,13 +466,13 @@ private:
         case SO_TIMESTAMP: {
           auto tv = (timeval const *)CMSG_DATA(cmsg);
           uint64_t timestamp_ns = tv->tv_sec * 1'000'000'000 + tv->tv_usec * 1000;
-          inout_metadata.timestamp_ns.emplace(timestamp_ns);
+          metadata.timestamp_ns.emplace(timestamp_ns);
           break;
         }
         case SO_RXQ_OVFL: {
           auto drops = (uint32_t const *)CMSG_DATA(cmsg);
-          inout_metadata.drops_since_last_receive =
-            drop_monitor_.get_drops_since_last_receive(*drops);
+          metadata.n_packets_dropped_since_last_receive =
+            drop_monitor.get_drops_since_last_receive(*drops);
           break;
         }
         default:
@@ -409,38 +490,8 @@ private:
 
   bool is_accepted_sender(const sockaddr_in & sender_addr)
   {
-    if (!config_.sender) return true;
-    return sender_addr.sin_addr.s_addr == config_.sender->ip.s_addr;
-  }
-
-  static MsgBuffers make_msg_header(std::vector<uint8_t> & receive_buffer)
-  {
-    msghdr msg{};
-    iovec iov{};
-    std::array<std::byte, 1024> control;
-
-    sockaddr_in sender_addr;
-    socklen_t sender_addr_len = sizeof(sender_addr);
-
-    iov.iov_base = receive_buffer.data();
-    iov.iov_len = receive_buffer.size();
-
-    msg.msg_iov = &iov;
-    msg.msg_iovlen = 1;
-    msg.msg_control = control.data();
-    msg.msg_controllen = control.size();
-    msg.msg_name = &sender_addr;
-    msg.msg_namelen = sender_addr_len;
-
-    return MsgBuffers{msg, iov, control, sender_addr};
-  }
-
-  static in_addr parse_ip_or_throw(const std::string & ip)
-  {
-    in_addr parsed_addr;
-    bool valid = inet_aton(ip.c_str(), &parsed_addr);
-    if (!valid) throw UsageError("Invalid IP address given");
-    return parsed_addr;
+    if (!config_.sender_filter) return true;
+    return sender_addr.sin_addr.s_addr == config_.sender_filter->ip.s_addr;
   }
 
   SockFd sock_fd_;
@@ -451,8 +502,6 @@ private:
   std::atomic_bool running_{false};
   std::thread receive_thread_;
   callback_t callback_;
-
-  DropMonitor drop_monitor_;
 };
 
 }  // namespace nebula::drivers::connections

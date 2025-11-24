@@ -168,6 +168,10 @@ Status HesaiHwInterface::set_sensor_configuration(
 
 Status HesaiHwInterface::sensor_interface_start()
 {
+  if (!sensor_configuration_) {
+    return Status::SENSOR_CONFIG_ERROR;
+  }
+
   auto builder = connections::UdpSocket::Builder(
     sensor_configuration_->host_ip, sensor_configuration_->data_port);
   if (!sensor_configuration_->multicast_ip.empty()) {
@@ -177,34 +181,34 @@ Status HesaiHwInterface::sensor_interface_start()
   builder.set_mtu(g_mtu_size);
 
   try {
-    builder.set_socket_buffer_size(g_udp_socket_buffer_size);
+    builder.set_socket_buffer_size(sensor_configuration_->udp_socket_receive_buffer_size_bytes);
   } catch (const connections::SocketError & e) {
     throw std::runtime_error(
-      "Could not set socket receive buffer size to " + std::to_string(g_udp_socket_buffer_size) +
+      "Could not set socket receive buffer size to " +
+      std::to_string(sensor_configuration_->udp_socket_receive_buffer_size_bytes) +
       ". Try increasing net.core.rmem_max.");
   }
 
   udp_socket_.emplace(std::move(builder).bind());
 
-  udp_socket_->subscribe([&](
-                           const std::vector<uint8_t> & packet,
-                           const connections::UdpSocket::RxMetadata & /* metadata */) {
-    receive_sensor_packet_callback(packet);
-  });
+  udp_socket_->subscribe(
+    [&](const std::vector<uint8_t> & packet, const connections::UdpSocket::RxMetadata & metadata) {
+      receive_sensor_packet_callback(packet, metadata);
+    });
 
   return Status::OK;
 }
 
-Status HesaiHwInterface::register_scan_callback(
-  std::function<void(const std::vector<uint8_t> &)> scan_callback)
+Status HesaiHwInterface::register_scan_callback(connections::UdpSocket::callback_t scan_callback)
 {
   cloud_packet_callback_ = std::move(scan_callback);
   return Status::OK;
 }
 
-void HesaiHwInterface::receive_sensor_packet_callback(const std::vector<uint8_t> & buffer)
+void HesaiHwInterface::receive_sensor_packet_callback(
+  const std::vector<uint8_t> & buffer, const connections::UdpSocket::RxMetadata & metadata)
 {
-  cloud_packet_callback_(buffer);
+  cloud_packet_callback_(buffer, metadata);
 }
 
 Status HesaiHwInterface::sensor_interface_stop()
@@ -234,21 +238,21 @@ Status HesaiHwInterface::get_calibration_configuration(
 Status HesaiHwInterface::initialize_tcp_driver()
 {
 #ifdef WITH_DEBUG_STDOUT_HESAI_HW_INTERFACE
-  std::cout << "HesaiHwInterface::InitializeTcpDriver" << std::endl;
-  std::cout << "st: tcp_driver_->init_socket" << std::endl;
-  std::cout << "sensor_configuration_->sensor_ip=" << sensor_configuration_->sensor_ip << std::endl;
-  std::cout << "sensor_configuration_->host_ip=" << sensor_configuration_->host_ip << std::endl;
-  std::cout << "PandarTcpCommandPort=" << PandarTcpCommandPort << std::endl;
+  logger_->debug("HesaiHwInterface::InitializeTcpDriver");
+  logger_->debug("st: tcp_driver_->init_socket");
+  logger_->debug("sensor_configuration_->sensor_ip=" + sensor_configuration_->sensor_ip);
+  logger_->debug("sensor_configuration_->host_ip=" + sensor_configuration_->host_ip);
+  logger_->debug("PandarTcpCommandPort=" + std::to_string(g_pandar_tcp_command_port));
 #endif
   tcp_driver_->init_socket(
     sensor_configuration_->sensor_ip, g_pandar_tcp_command_port, sensor_configuration_->host_ip,
     g_pandar_tcp_command_port);
 #ifdef WITH_DEBUG_STDOUT_HESAI_HW_INTERFACE
-  std::cout << "ed: tcp_driver_->init_socket" << std::endl;
+  logger_->debug("ed: tcp_driver_->init_socket");
 #endif
   if (!tcp_driver_->open()) {
 #ifdef WITH_DEBUG_STDOUT_HESAI_HW_INTERFACE
-    std::cout << "!tcp_driver_->open()" << std::endl;
+    logger_->debug("!tcp_driver_->open()");
 #endif
     //    tcp_driver_->close();
     tcp_driver_->closeSync();
@@ -278,7 +282,7 @@ boost::property_tree::ptree HesaiHwInterface::parse_json(const std::string & str
     ss << str;
     boost::property_tree::read_json(ss, tree);
   } catch (boost::property_tree::json_parser_error & e) {
-    std::cerr << e.what() << std::endl;
+    logger_->error(e.what());
   }
   return tree;
 }
@@ -307,33 +311,33 @@ HesaiPtpDiagStatus HesaiHwInterface::get_ptp_diag_status()
   return diag_status;
 }
 
-HesaiPtpDiagPort HesaiHwInterface::get_ptp_diag_port()
+PtpTlvPortDataSet HesaiHwInterface::get_ptp_diag_port()
 {
   auto response_or_err =
     send_receive(g_ptc_command_ptp_diagnostics, {g_ptc_command_ptp_port_data_set});
   auto response =
     response_or_err.value_or_throw(pretty_print_ptc_error(response_or_err.error_or({})));
-  auto diag_port = check_size_and_parse<HesaiPtpDiagPort>(response);
+  auto diag_port = check_size_and_parse<PtpTlvPortDataSet>(response);
   return diag_port;
 }
 
-HesaiPtpDiagTime HesaiHwInterface::get_ptp_diag_time()
+PtpTlvTimeStatusNp HesaiHwInterface::get_ptp_diag_time()
 {
   auto response_or_err =
     send_receive(g_ptc_command_ptp_diagnostics, {g_ptc_command_ptp_time_status_np});
   auto response =
     response_or_err.value_or_throw(pretty_print_ptc_error(response_or_err.error_or({})));
-  auto diag_time = check_size_and_parse<HesaiPtpDiagTime>(response);
+  auto diag_time = check_size_and_parse<PtpTlvTimeStatusNp>(response);
   return diag_time;
 }
 
-HesaiPtpDiagGrandmaster HesaiHwInterface::get_ptp_diag_grandmaster()
+HesaiPtpTlvGrandmasterSettingsNp HesaiHwInterface::get_ptp_diag_grandmaster()
 {
   auto response_or_err =
     send_receive(g_ptc_command_ptp_diagnostics, {g_ptc_command_ptp_grandmaster_settings_np});
   auto response =
     response_or_err.value_or_throw(pretty_print_ptc_error(response_or_err.error_or({})));
-  auto diag_grandmaster = check_size_and_parse<HesaiPtpDiagGrandmaster>(response);
+  auto diag_grandmaster = check_size_and_parse<HesaiPtpTlvGrandmasterSettingsNp>(response);
   return diag_grandmaster;
 }
 
@@ -601,6 +605,53 @@ HesaiLidarRangeAll HesaiHwInterface::get_lidar_range()
   return hesai_range_all;
 }
 
+Status HesaiHwInterface::set_high_resolution_mode(bool enable)
+{
+  std::vector<unsigned char> request_payload;
+  request_payload.emplace_back(enable ? 0x01 : 0x00);
+
+  auto response_or_err = send_receive(g_ptc_command_set_high_resolution_mode, request_payload);
+  response_or_err.value_or_throw(pretty_print_ptc_error(response_or_err.error_or({})));
+  return Status::OK;
+}
+
+bool HesaiHwInterface::get_high_resolution_mode()
+{
+  auto response_or_err = send_receive(g_ptc_command_get_high_resolution_mode);
+  auto response =
+    response_or_err.value_or_throw(pretty_print_ptc_error(response_or_err.error_or({})));
+
+  if (response.size() != 1) {
+    throw std::runtime_error("Unexpected payload size");
+  }
+
+  return response[0] > 0x00;
+}
+
+Status HesaiHwInterface::set_up_close_blockage_detection(bool enable)
+{
+  std::vector<unsigned char> request_payload;
+  request_payload.emplace_back(enable ? 0x01 : 0x00);
+
+  auto response_or_err =
+    send_receive(g_ptc_command_set_up_close_blockage_detection, request_payload);
+  response_or_err.value_or_throw(pretty_print_ptc_error(response_or_err.error_or({})));
+  return Status::OK;
+}
+
+bool HesaiHwInterface::get_up_close_blockage_detection()
+{
+  auto response_or_err = send_receive(g_ptc_command_get_up_close_blockage_detection);
+  auto response =
+    response_or_err.value_or_throw(pretty_print_ptc_error(response_or_err.error_or({})));
+
+  if (response.size() != 1) {
+    throw std::runtime_error("Unexpected payload size");
+  }
+
+  return response[0] > 0x00;
+}
+
 Status HesaiHwInterface::check_and_set_lidar_range(
   const HesaiCalibrationConfigurationBase & calibration)
 {
@@ -851,19 +902,19 @@ HesaiStatus HesaiHwInterface::set_ptp_config_sync_http(
     return st;
   }
 
-  auto response =
-    hcd->get((boost::format("/pandar.cgi?action=set&object=lidar&key=ptp_configuration&value={"
-                            "\"Profile\": %d,"
-                            "\"Domain\": %d,"
-                            "\"Network\": %d,"
-                            "\"LogAnnounceInterval\": %d,"
-                            "\"LogSyncInterval\": %d,"
-                            "\"LogMinDelayReqInterval\": %d,"
-                            "\"tsn_switch\": %d"
-                            "}") %
-              profile % domain % network % logAnnounceInterval % logSyncInterval %
-              logMinDelayReqInterval % 0)
-               .str());
+  auto response = hcd->get((boost::format(
+                              "/pandar.cgi?action=set&object=lidar&key=ptp_configuration&value={"
+                              "\"Profile\": %d,"
+                              "\"Domain\": %d,"
+                              "\"Network\": %d,"
+                              "\"LogAnnounceInterval\": %d,"
+                              "\"LogSyncInterval\": %d,"
+                              "\"LogMinDelayReqInterval\": %d,"
+                              "\"tsn_switch\": %d"
+                              "}") %
+                            profile % domain % network % logAnnounceInterval % logSyncInterval %
+                            logMinDelayReqInterval % 0)
+                             .str());
   ctx->run();
   return unwrap_http_response(response).first;
 }
@@ -885,10 +936,11 @@ HesaiStatus HesaiHwInterface::set_sync_angle_sync_http(
   if (st != Status::OK) {
     return st;
   }
-  auto tmp_str = (boost::format("/pandar.cgi?action=set&object=lidar_sync&key=sync_angle&value={"
-                                "\"sync\": %d,"
-                                "\"syncAngle\": %d"
-                                "}") %
+  auto tmp_str = (boost::format(
+                    "/pandar.cgi?action=set&object=lidar_sync&key=sync_angle&value={"
+                    "\"sync\": %d,"
+                    "\"syncAngle\": %d"
+                    "}") %
                   enable % angle)
                    .str();
   auto response = hcd->get(tmp_str);
@@ -935,7 +987,7 @@ HesaiStatus HesaiHwInterface::check_and_set_config(
 {
   using namespace std::chrono_literals;  // NOLINT(build/namespaces)
 #ifdef WITH_DEBUG_STDOUT_HESAI_HW_INTERFACE
-  std::cout << "Start CheckAndSetConfig(HesaiConfig)!!" << std::endl;
+  logger_->debug("Start CheckAndSetConfig(HesaiConfig)!");
 #endif
   const auto hesai_config = hesai_config_ptr->get();
   auto current_return_mode = nebula::drivers::return_mode_from_int_hesai(
@@ -1115,8 +1167,38 @@ HesaiStatus HesaiHwInterface::check_and_set_config(
       g_ptp_sync_interval, g_ptp_log_min_delay_interval);
   }
 
+  if (
+    sensor_configuration->sensor_model == SensorModel::HESAI_PANDAR128_E3X ||
+    sensor_configuration->sensor_model == SensorModel::HESAI_PANDAR128_E4X) {
+    auto hires_currently_enabled = get_high_resolution_mode();
+
+    if (hires_currently_enabled != sensor_configuration->hires_mode) {
+      logger_->info("current lidar hires_mode: " + std::to_string(hires_currently_enabled));
+      logger_->info(
+        "current configuration hires_mode: " + std::to_string(sensor_configuration->hires_mode));
+
+      logger_->info("Setting hires_mode via TCP.");
+      set_high_resolution_mode(sensor_configuration->hires_mode);
+    }
+
+    if (sensor_configuration->sensor_model == SensorModel::HESAI_PANDAR128_E4X) {
+      auto blockage_detection_currently_enabled = get_up_close_blockage_detection();
+      bool blockage_detection_desired =
+        sensor_configuration->blockage_mask_horizontal_bin_size_mdeg.has_value();
+      if (blockage_detection_currently_enabled != blockage_detection_desired) {
+        logger_->info(
+          "current lidar up_close_blockage_detection: " +
+          std::to_string(blockage_detection_currently_enabled));
+        logger_->info(
+          "current configuration up_close_blockage_detection: " +
+          std::to_string(blockage_detection_desired));
+        set_up_close_blockage_detection(blockage_detection_desired);
+      }
+    }
+  }
+
 #ifdef WITH_DEBUG_STDOUT_HESAI_HW_INTERFACE
-  std::cout << "End CheckAndSetConfig(HesaiConfig)!!" << std::endl;
+  logger_->debug("End CheckAndSetConfig(HesaiConfig)!");
 #endif
   logger_->debug("GetAndCheckConfig(HesaiConfig) finished");
 
@@ -1128,15 +1210,15 @@ HesaiStatus HesaiHwInterface::check_and_set_config(
   HesaiLidarRangeAll hesai_lidar_range_all)
 {
 #ifdef WITH_DEBUG_STDOUT_HESAI_HW_INTERFACE
-  std::cout << "Start CheckAndSetConfig(HesaiLidarRangeAll)!!" << std::endl;
+  logger_->debug("Start CheckAndSetConfig(HesaiLidarRangeAll)!");
 #endif
   //*
   // g_ptc_command_set_lidar_range
   bool set_flg = false;
   if (hesai_lidar_range_all.method != 0) {
 #ifdef WITH_DEBUG_STDOUT_HESAI_HW_INTERFACE
-    std::cout << "current hesai_lidar_range_all.method: " << hesai_lidar_range_all.method
-              << std::endl;
+    logger_->debug(
+      "current hesai_lidar_range_all.method: " + std::to_string(hesai_lidar_range_all.method));
 #endif
     set_flg = true;
   } else {
@@ -1177,7 +1259,7 @@ HesaiStatus HesaiHwInterface::check_and_set_config(
   }
 
 #ifdef WITH_DEBUG_STDOUT_HESAI_HW_INTERFACE
-  std::cout << "End CheckAndSetConfig(HesaiLidarRangeAll)!!" << std::endl;
+  logger_->debug("End CheckAndSetConfig(HesaiLidarRangeAll)!");
 #endif
   return Status::WAITING_FOR_SENSOR_RESPONSE;
 }
@@ -1185,7 +1267,7 @@ HesaiStatus HesaiHwInterface::check_and_set_config(
 HesaiStatus HesaiHwInterface::check_and_set_config()
 {
 #ifdef WITH_DEBUG_STDOUT_HESAI_HW_INTERFACE
-  std::cout << "Start CheckAndSetConfig!!" << std::endl;
+  logger_->debug("Start CheckAndSetConfig!");
 #endif
   std::thread t([this] {
     auto result = get_config();
@@ -1207,7 +1289,7 @@ HesaiStatus HesaiHwInterface::check_and_set_config()
   });
   t2.join();
 #ifdef WITH_DEBUG_STDOUT_HESAI_HW_INTERFACE
-  std::cout << "End CheckAndSetConfig!!" << std::endl;
+  logger_->debug("End CheckAndSetConfig!");
 #endif
   return Status::OK;
 }
@@ -1270,44 +1352,22 @@ bool HesaiHwInterface::use_http_set_spin_rate(int model)
 {
   switch (model) {
     case 0:
-      return true;
-      break;
     case 2:
-      return true;
-      break;
-    case 3:
-      return false;
-      break;
     case 15:
-      return true;
-      break;
     case 17:
-      return true;
-      break;
-    case 25:
-      return false;
-      break;
-    case 26:
-      return false;
-      break;
-    case 32:
-      return false;
-      break;
-    case 38:
-      return false;
-      break;
-    case 42:
-      return false;
-      break;
-    case 48:
-      return false;
-      break;
     default:
       return true;
-      break;
+    case 3:
+    case 25:
+    case 26:
+    case 32:
+    case 38:
+    case 42:
+    case 48:
+      return false;
   }
 }
-bool HesaiHwInterface::use_http_set_spin_rate()
+[[nodiscard]] bool HesaiHwInterface::use_http_set_spin_rate() const
 {
   return use_http_set_spin_rate(target_model_no_);
 }
@@ -1315,44 +1375,22 @@ bool HesaiHwInterface::use_http_get_lidar_monitor(int model)
 {
   switch (model) {
     case 0:
-      return true;
-      break;
     case 2:
-      return true;
-      break;
-    case 3:
-      return false;
-      break;
     case 15:
-      return true;
-      break;
     case 17:
-      return true;
-      break;
-    case 25:
-      return false;
-      break;
-    case 26:
-      return false;
-      break;
     case 32:
-      return true;
-      break;
-    case 38:
-      return false;
-      break;
-    case 42:
-      return false;
-      break;
-    case 48:
-      return false;
-      break;
     default:
       return true;
-      break;
+    case 3:
+    case 25:
+    case 26:
+    case 38:
+    case 42:
+    case 48:
+      return false;
   }
 }
-bool HesaiHwInterface::use_http_get_lidar_monitor()
+[[nodiscard]] bool HesaiHwInterface::use_http_get_lidar_monitor() const
 {
   return use_http_get_lidar_monitor(target_model_no_);
 }

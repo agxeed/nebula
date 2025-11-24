@@ -14,12 +14,16 @@
 
 #pragma once
 
+#include "nebula_ros/common/single_consumer_processor.hpp"
+#include "nebula_ros/common/sync_tooling/sync_tooling_worker.hpp"
+
 #include <diagnostic_updater/diagnostic_updater.hpp>
 #include <nebula_common/hesai/hesai_common.hpp>
 #include <nebula_hw_interfaces/nebula_hw_interfaces_hesai/hesai_cmd_response.hpp>
 #include <nebula_hw_interfaces/nebula_hw_interfaces_hesai/hesai_hw_interface.hpp>
 #include <nlohmann/json.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include <rclcpp/time.hpp>
 
 #include <boost/asio.hpp>
 #include <boost/lexical_cast.hpp>
@@ -27,7 +31,6 @@
 
 #include <memory>
 #include <string>
-#include <vector>
 
 namespace nebula::ros
 {
@@ -38,33 +41,37 @@ class HesaiHwMonitorWrapper
 {
 public:
   HesaiHwMonitorWrapper(
-    rclcpp::Node * const parent_node,
+    rclcpp::Node * parent_node, diagnostic_updater::Updater & diagnostic_updater,
     const std::shared_ptr<nebula::drivers::HesaiHwInterface> & hw_interface,
-    std::shared_ptr<const nebula::drivers::HesaiSensorConfiguration> & config);
+    const std::shared_ptr<const nebula::drivers::HesaiSensorConfiguration> & config,
+    const std::shared_ptr<SyncToolingWorker> & sync_tooling_worker);
 
   void on_config_change(
     const std::shared_ptr<const nebula::drivers::HesaiSensorConfiguration> & /* new_config */)
   {
   }
 
-  nebula::Status status();
+  // This is currently static as it returns a dummy status for legacy reasons
+  static nebula::Status status();
 
 private:
   static void add_json_item_to_diagnostics(
     diagnostic_updater::DiagnosticStatusWrapper & diagnostics, const std::string & key,
     const json & value);
 
-  void initialize_hesai_diagnostics(bool monitor_enabled);
+  void initialize_hesai_diagnostics(diagnostic_updater::Updater & diagnostic_updater);
 
-  std::string get_ptree_value(boost::property_tree::ptree * pt, const std::string & key);
+  static std::string get_ptree_value(boost::property_tree::ptree * pt, const std::string & key);
 
-  std::string get_fixed_precision_string(double val, int pre);
+  static std::string get_fixed_precision_string(double val, int pre);
 
-  void on_hesai_status_timer();
+  void fetch_status();
 
-  void on_hesai_lidar_monitor_timer_http();
+  void fetch_monitor_http();
 
-  void on_hesai_lidar_monitor_timer();
+  void fetch_monitor_tcp();
+
+  void fetch_sync_diag();
 
   void hesai_check_status(diagnostic_updater::DiagnosticStatusWrapper & diagnostics);
 
@@ -78,34 +85,45 @@ private:
 
   void hesai_check_voltage(diagnostic_updater::DiagnosticStatusWrapper & diagnostics);
 
+  void submit_clock_state(const HesaiLidarStatusBase & status);
+
+  void fetch_diagnostics_from_sensor();
+
+  [[nodiscard]] bool is_stale(const rclcpp::Time & last_update) const;
+
   rclcpp::Logger logger_;
-  diagnostic_updater::Updater diagnostics_updater_;
   nebula::Status status_;
 
   const std::shared_ptr<nebula::drivers::HesaiHwInterface> hw_interface_;
   rclcpp::Node * const parent_node_;
 
-  uint16_t diag_span_;
-  rclcpp::TimerBase::SharedPtr diagnostics_update_timer_{};
-  rclcpp::TimerBase::SharedPtr fetch_diagnostics_timer_{};
+  uint16_t diag_span_ms_;
+  bool monitor_enabled_;
 
-  std::shared_ptr<HesaiLidarStatusBase> current_status_{};
-  std::shared_ptr<HesaiLidarMonitor> current_monitor_{};
-  std::shared_ptr<HesaiConfigBase> current_config_{};
-  std::shared_ptr<boost::property_tree::ptree> current_lidar_monitor_tree_{};
+  rclcpp::TimerBase::SharedPtr fetch_diagnostics_timer_;
 
-  std::unique_ptr<rclcpp::Time> current_status_time_{};
-  std::unique_ptr<rclcpp::Time> current_config_time_{};
-  std::unique_ptr<rclcpp::Time> current_lidar_monitor_time_{};
+  std::shared_ptr<HesaiLidarStatusBase> current_status_;
+  std::shared_ptr<HesaiLidarMonitor> current_monitor_;
+  std::shared_ptr<HesaiConfigBase> current_config_;
+  std::shared_ptr<boost::property_tree::ptree> current_lidar_monitor_tree_;
 
-  uint8_t current_diag_status_;
-  uint8_t current_monitor_status_;
+  std::unique_ptr<rclcpp::Time> current_status_time_;
+  std::unique_ptr<rclcpp::Time> current_config_time_;
+  std::unique_ptr<rclcpp::Time> current_lidar_monitor_time_;
+
+  uint8_t current_diag_status_{diagnostic_msgs::msg::DiagnosticStatus::STALE};
+  uint8_t current_monitor_status_{diagnostic_msgs::msg::DiagnosticStatus::STALE};
 
   std::mutex mtx_lidar_status_;
   std::mutex mtx_lidar_monitor_;
 
-  const std::string MSG_NOT_SUPPORTED_ = "Not supported";
-  const std::string MSG_ERROR_ = "Error";
-  const std::string MSG_SEP_ = ": ";
+  std::shared_ptr<SyncToolingWorker> sync_tooling_worker_;
+  /// @brief A separate thread that handles blocking TCP requests to the sensor,
+  /// with a thread-safe queue that ensures there is at most one in-flight request at a time.
+  SingleConsumerProcessor<std::monostate> fetch_diagnostics_processor_;
+
+  static constexpr auto msg_not_supported = "Not supported";
+  static constexpr auto msg_error = "Error";
+  static constexpr auto msg_separator = ": ";
 };
 }  // namespace nebula::ros

@@ -76,11 +76,15 @@ const uint8_t g_ptc_command_set_lidar_range = 0x22;
 const uint8_t g_ptc_command_get_lidar_range = 0x23;
 const uint8_t g_ptc_command_set_ptp_config = 0x24;
 const uint8_t g_ptc_command_get_ptp_config = 0x26;
+const uint8_t g_ptc_command_set_high_resolution_mode = 0x29;
+const uint8_t g_ptc_command_get_high_resolution_mode = 0x28;
 const uint8_t g_ptp_command_set_ptp_lock_offset = 0x39;
 const uint8_t g_ptp_command_get_ptp_lock_offset = 0x3a;
 const uint8_t g_ptc_command_reset = 0x25;
 const uint8_t g_ptc_command_set_rotate_direction = 0x2a;
 const uint8_t g_ptc_command_lidar_monitor = 0x27;
+const uint8_t g_ptc_command_set_up_close_blockage_detection = 0x58;
+const uint8_t g_ptc_command_get_up_close_blockage_detection = 0x59;
 
 const uint8_t g_ptc_error_code_no_error = 0x00;
 const uint8_t g_ptc_error_code_invalid_input_param = 0x01;
@@ -97,12 +101,6 @@ const uint8_t g_tcp_error_timeout = 4;
 const uint8_t g_tcp_error_incomplete_response = 8;
 
 const uint16_t g_mtu_size = 1500;
-
-/// @brief The kernel buffer size in bytes to use for receiving UDP packets. If the buffer is too
-/// small to bridge scheduling and processing delays, packets will be dropped. This corresponds to
-/// the net.core.rmem_default setting in Linux. The current value is hardcoded to accommodate one
-/// pointcloud worth of OT128 packets (currently the highest data rate sensor supported).
-const size_t g_udp_socket_buffer_size = g_mtu_size * 3600;
 
 // Time interval between Announce messages, in units of log seconds (default: 1)
 const int g_ptp_log_announce_interval = 1;
@@ -133,8 +131,7 @@ private:
   std::shared_ptr<boost::asio::io_context> m_owned_ctx_;
   std::shared_ptr<::drivers::tcp_driver::TcpDriver> tcp_driver_;
   std::shared_ptr<const HesaiSensorConfiguration> sensor_configuration_;
-  std::function<void(const std::vector<uint8_t> & buffer)>
-    cloud_packet_callback_; /**This function pointer is called when the scan is complete*/
+  connections::UdpSocket::callback_t cloud_packet_callback_;
 
   std::mutex mtx_inflight_tcp_request_;
 
@@ -161,7 +158,7 @@ private:
   /// @param error_code The error code, containing the sensor's error code (if any), along with
   /// flags such as TCP_ERROR_UNRELATED_RESPONSE etc.
   /// @return A string description of all errors in this code
-  std::string pretty_print_ptc_error(ptc_error_t error_code);
+  static std::string pretty_print_ptc_error(ptc_error_t error_code);
 
   /// @brief Checks if the data size matches that of the struct to be parsed, and parses the struct.
   /// If data is too small, a std::runtime_error is thrown. If data is too large, a warning is
@@ -198,7 +195,8 @@ public:
 
   /// @brief Callback function to receive the Cloud Packet data from the UDP Driver
   /// @param buffer Buffer containing the data received from the UDP socket
-  void receive_sensor_packet_callback(const std::vector<uint8_t> & buffer);
+  void receive_sensor_packet_callback(
+    const std::vector<uint8_t> & buffer, const connections::UdpSocket::RxMetadata & metadata);
   /// @brief Starting the interface that handles UDP streams
   /// @return Resulting status
   Status sensor_interface_start();
@@ -221,7 +219,7 @@ public:
   /// @brief Registering callback for PandarScan
   /// @param scan_callback Callback function
   /// @return Resulting status
-  Status register_scan_callback(std::function<void(const std::vector<uint8_t> &)> scan_callback);
+  Status register_scan_callback(connections::UdpSocket::callback_t scan_callback);
   /// @brief Getting data with PTC_COMMAND_GET_LIDAR_CALIBRATION
   /// @return Resulting status
   std::string get_lidar_calibration_string();
@@ -233,13 +231,13 @@ public:
   HesaiPtpDiagStatus get_ptp_diag_status();
   /// @brief Getting data with PTC_COMMAND_PTP_DIAGNOSTICS (PTP TLV PORT_DATA_SET)
   /// @return Resulting status
-  HesaiPtpDiagPort get_ptp_diag_port();
+  PtpTlvPortDataSet get_ptp_diag_port();
   /// @brief Getting data with PTC_COMMAND_PTP_DIAGNOSTICS (PTP TLV TIME_STATUS_NP)
   /// @return Resulting status
-  HesaiPtpDiagTime get_ptp_diag_time();
+  PtpTlvTimeStatusNp get_ptp_diag_time();
   /// @brief Getting data with PTC_COMMAND_PTP_DIAGNOSTICS (PTP TLV GRANDMASTER_SETTINGS_NP)
   /// @return Resulting status
-  HesaiPtpDiagGrandmaster get_ptp_diag_grandmaster();
+  HesaiPtpTlvGrandmasterSettingsNp get_ptp_diag_grandmaster();
   /// @brief Getting data with PTC_COMMAND_GET_INVENTORY_INFO
   /// @return Resulting status
   std::shared_ptr<HesaiInventoryBase> get_inventory();
@@ -312,6 +310,19 @@ public:
   /// @brief Getting values with PTC_COMMAND_GET_LIDAR_RANGE
   /// @return Resulting status
   HesaiLidarRangeAll get_lidar_range();
+  /// @brief Setting values with PTC_COMMAND_SET_HIGH_RESOLUTION_MODE
+  /// @return Resulting status
+  Status set_high_resolution_mode(bool enable);
+  /// @brief Getting values with PTC_COMMAND_GET_HIGH_RESOLUTION_MODE
+  /// @return Resulting status
+  bool get_high_resolution_mode();
+  /// @brief Setting values with PTC_COMMAND_SET_UP_CLOSE_BLOCKAGE_DETECTION
+  /// @param enable Enable up close blockage detection
+  /// @return Resulting status
+  Status set_up_close_blockage_detection(bool enable);
+  /// @brief Getting values with PTC_COMMAND_GET_UP_CLOSE_BLOCKAGE_DETECTION
+  /// @return Resulting status
+  bool get_up_close_blockage_detection();
 
   /**
    * @brief Given the HW interface's sensor configuration and a given calibration, set the sensor
@@ -420,7 +431,7 @@ public:
   /// @brief Convert to model in Hesai protocol from nebula::drivers::SensorModel
   /// @param model
   /// @return
-  int nebula_model_to_hesai_model_no(nebula::drivers::SensorModel model);
+  static int nebula_model_to_hesai_model_no(nebula::drivers::SensorModel model);
 
   /// @brief Set target model number (for proper use of HTTP and TCP according to the support of the
   /// target model)
@@ -435,17 +446,17 @@ public:
   /// @brief Whether to use HTTP for setting SpinRate
   /// @param model Model number
   /// @return Use HTTP
-  bool use_http_set_spin_rate(int model);
+  static bool use_http_set_spin_rate(int model);
   /// @brief Whether to use HTTP for setting SpinRate
   /// @return Use HTTP
-  bool use_http_set_spin_rate();
+  [[nodiscard]] bool use_http_set_spin_rate() const;
   /// @brief Whether to use HTTP for getting LidarMonitor
   /// @param model Model number
   /// @return Use HTTP
-  bool use_http_get_lidar_monitor(int model);
+  static bool use_http_get_lidar_monitor(int model);
   /// @brief Whether to use HTTP for getting LidarMonitor
   /// @return Use HTTP
-  bool use_http_get_lidar_monitor();
+  [[nodiscard]] bool use_http_get_lidar_monitor() const;
 };
 }  // namespace nebula::drivers
 

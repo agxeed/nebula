@@ -17,16 +17,51 @@
 
 #include <nebula_common/hesai/hesai_common.hpp>
 #include <nebula_common/point_types.hpp>
+#include <nebula_common/util/expected.hpp>
 
-#include <tuple>
+#include <cstdint>
 #include <vector>
 
 namespace nebula::drivers
 {
+/// @brief Errors that can occur during packet decoding
+enum class DecodeError : uint8_t {
+  PACKET_PARSE_FAILED,  ///< Failed to parse packet structure
+  DRIVER_NOT_OK,        ///< Driver status is not OK
+  INVALID_PACKET_SIZE,  ///< Packet size is invalid
+};
+
+/// @brief Metadata for a decoded packet
+struct PacketMetadata
+{
+  /// @brief Timestamp included in the packet payload in nanoseconds
+  uint64_t packet_timestamp_ns{};
+  /// @brief Whether a scan completed with this packet
+  bool did_scan_complete{false};
+};
+
+/// @brief Performance information about decoding and callback timings
+struct PerformanceCounters
+{
+  uint64_t decode_time_ns{0};
+  uint64_t callback_time_ns{0};
+};
+
+struct PacketDecodeResult
+{
+  /// @brief Performance information about decode and callback timings
+  PerformanceCounters performance_counters;
+  /// @brief Metadata or error information about the decoded packet
+  util::expected<PacketMetadata, DecodeError> metadata_or_error;
+};
+
 /// @brief Base class for Hesai LiDAR decoder
 class HesaiScanDecoder
 {
 public:
+  using pointcloud_callback_t =
+    std::function<void(const NebulaPointCloudPtr & pointcloud, double timestamp_s)>;
+
   HesaiScanDecoder(HesaiScanDecoder && c) = delete;
   HesaiScanDecoder & operator=(HesaiScanDecoder && c) = delete;
   HesaiScanDecoder(const HesaiScanDecoder & c) = delete;
@@ -37,16 +72,11 @@ public:
 
   /// @brief Parses PandarPacket and add its points to the point cloud
   /// @param packet The incoming PandarPacket
-  /// @return The last azimuth processed
-  virtual int unpack(const std::vector<uint8_t> & packet) = 0;
+  /// @return Metadata on success, or decode error on failure. Performance counters are always
+  /// returned.
+  virtual PacketDecodeResult unpack(const std::vector<uint8_t> & packet) = 0;
 
-  /// @brief Indicates whether one full scan is ready
-  /// @return Whether a scan is ready
-  virtual bool has_scanned() = 0;
-
-  /// @brief Returns the point cloud and timestamp of the last scan
-  /// @return A tuple of point cloud and timestamp in nanoseconds
-  virtual std::tuple<drivers::NebulaPointCloudPtr, double> get_pointcloud() = 0;
+  virtual void set_pointcloud_callback(pointcloud_callback_t callback) = 0;
 };
 }  // namespace nebula::drivers
 
