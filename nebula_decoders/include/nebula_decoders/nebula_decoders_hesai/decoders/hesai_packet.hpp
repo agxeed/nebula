@@ -19,6 +19,7 @@
 #include <ctime>
 #include <stdexcept>
 #include <type_traits>
+#include "nebula_common/util/string_conversions.hpp"
 namespace nebula::drivers::hesai_packet
 {
 
@@ -215,7 +216,7 @@ inline int get_n_returns(uint8_t return_mode)
     case return_mode::TRIPLE_FIRST_LAST_STRONGEST:
       return 3;
     default:
-      throw std::runtime_error("Unknown return mode");
+      throw std::runtime_error("Unknown return mode"+util::to_string(return_mode));
   }
 }
 

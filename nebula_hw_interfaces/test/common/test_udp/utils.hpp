@@ -20,6 +20,11 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <rclcpp/rclcpp.hpp>
+#include <rclcpp/version.h>  
+
+// #include <rclcpp/rclcpp.hpp>
+
 
 #include <cerrno>
 #include <chrono>
@@ -29,6 +34,7 @@
 #include <optional>
 #include <utility>
 #include <vector>
+#include <rosbag2_storage/serialized_bag_message.hpp>
 
 inline std::optional<int> udp_send(
   const char * to_ip, uint16_t to_port, const std::vector<uint8_t> & bytes)
@@ -77,4 +83,15 @@ receive_once(nebula::drivers::connections::UdpSocket & sock, std::chrono::durati
     return future.get();
   }
   return std::nullopt;
+}
+
+
+static inline rcutils_time_point_value_t get_bag_timestamp(
+  const std::shared_ptr<rosbag2_storage::SerializedBagMessage> & msg)
+{
+#if RCLCPP_VERSION_GTE(24, 0, 0)
+  return (msg->send_timestamp != 0) ? msg->send_timestamp : msg->recv_timestamp;
+#else
+  return msg->time_stamp;
+#endif
 }

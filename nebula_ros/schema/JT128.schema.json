@@ -1,0 +1,66 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "JT128.schema.json",
+  "title": "Hesai JT128 model-specific parameters",
+  "description": "Sensor-specific parameters for the Hesai JT128 LiDAR used by Nebula.",
+  "allOf": [
+    {
+      "$ref": "hesai_common.schema.json"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "rotation_speed": {
+          "type": "integer",
+          "title": "Rotation speed (RPM)",
+          "description": "Spin rate of the motor. JT128 supports 600 RPM (10 Hz) and 1200 RPM (20 Hz).",
+          "enum": [600, 1200],
+          "default": 600
+        },
+
+        "min_range": {
+          "type": "number",
+          "title": "Minimum range (m)",
+          "description": "Minimum distance in meters. Points closer than this are filtered out. JT128 instrumented range is 0–60 m; practical min around 0.3–0.5 m.",
+          "minimum": 0.0,
+          "maximum": 60.0,
+          "default": 0.3
+        },
+
+        "max_range": {
+          "type": "number",
+          "title": "Maximum range (m)",
+          "description": "Maximum distance in meters. Points farther than this are filtered out. JT128 instrumented range is 0–60 m.",
+          "minimum": 0.0,
+          "maximum": 60.0,
+          "default": 60.0
+        },
+
+        "return_mode": {
+          "type": "string",
+          "title": "Return mode",
+          "description": "JT128 supports single and dual return modes. These symbolic values must match the mapping you implement in the JT128 HW interface.",
+          "enum": [
+            "single_first",
+            "single_strongest",
+            "single_last",
+            "dual_last_strongest",
+            "dual_last_first",
+            "dual_first_strongest"
+          ],
+          "default": "dual_last_strongest"
+        },
+
+        "dual_return_distance_threshold": {
+          "type": "number",
+          "title": "Dual return distance fusion threshold (m)",
+          "description": "For multiple returns that are close together, points can be fused if they are below this distance threshold.",
+          "minimum": 0.0,
+          "maximum": 5.0,
+          "default": 0.1
+        }
+      },
+      "additionalProperties": false
+    }
+  ]
+}

@@ -186,14 +186,14 @@ void HesaiRosDecoderTest::read_bag(
 
       RCLCPP_DEBUG_STREAM(
         get_logger(),
-        "Found data in topic " << bag_message->topic_name << ": " << bag_message->time_stamp);
+        "Found data in topic " << bag_message->topic_name << ": " << get_bag_timestamp(bag_message));
 
       auto extracted_msg_ptr = std::make_shared<pandar_msgs::msg::PandarScan>(extracted_msg);
 
       drivers::HesaiScanDecoder::pointcloud_callback_t pointcloud_cb =
         [&](const drivers::NebulaPointCloudPtr & pointcloud, double timestamp_s) {
           auto timestamp_ns = static_cast<uint64_t>(timestamp_s * 1e9);
-          scan_callback(bag_message->time_stamp, timestamp_ns, pointcloud);
+          scan_callback(get_bag_timestamp(bag_message), timestamp_ns, pointcloud);
         };
 
       driver_ptr_->set_pointcloud_callback(pointcloud_cb);

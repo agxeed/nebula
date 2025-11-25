@@ -630,6 +630,19 @@ HesaiRosWrapper::get_calibration_result_t HesaiRosWrapper::get_calibration_data(
   if (!ignore_others && launch_hw_) {
     try {
       auto raw_data = hw_interface_wrapper_->hw_interface()->get_lidar_calibration_bytes();
+        std::ostringstream oss;
+  oss << "RAW CALIBRATION BYTES (" << raw_data.size() << " bytes):\n";
+
+  for (size_t i = 0; i < raw_data.size(); i++) {
+    // Print 16 bytes per line
+    if (i % 16 == 0) {
+      oss << "\n" << std::setw(6) << std::setfill('0') << std::hex << i << ": ";
+    }
+    oss << std::setw(2) << std::setfill('0') << std::hex
+        << static_cast<int>(raw_data[i]) << " ";
+  }
+
+  RCLCPP_INFO_STREAM(logger, oss.str());
       RCLCPP_INFO(logger, "Downloaded calibration data from sensor.");
       auto status = calib->save_to_file_from_bytes(calibration_from_sensor_path, raw_data);
       if (status != Status::OK) {

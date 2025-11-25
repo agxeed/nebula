@@ -421,6 +421,10 @@ std::shared_ptr<HesaiLidarStatusBase> HesaiHwInterface::get_lidar_status()
       auto hesai_lidarstatus = check_size_and_parse<HesaiLidarStatusQT128::Internal>(response);
       return std::make_shared<HesaiLidarStatusQT128>(hesai_lidarstatus);
     }
+    case SensorModel::HESAI_JT128: {
+      auto hesai_lidarstatus = check_size_and_parse<HesaiLidarStatusJT128::Internal>(response);
+      return std::make_shared<HesaiLidarStatusJT128>(hesai_lidarstatus);
+    }
   }
 }
 

@@ -15,6 +15,7 @@
 #include "nebula_decoders/nebula_decoders_hesai/decoders/pandar_xt16.hpp"
 #include "nebula_decoders/nebula_decoders_hesai/decoders/pandar_xt32.hpp"
 #include "nebula_decoders/nebula_decoders_hesai/decoders/pandar_xt32m.hpp"
+#include "nebula_decoders/nebula_decoders_hesai/decoders/jt128.hpp"
 
 #include <cstdint>
 #include <memory>
@@ -79,6 +80,12 @@ HesaiDriver::HesaiDriver(
     }
     case SensorModel::HESAI_PANDAR128_E4X: {
       scan_decoder_ = initialize_decoder<Pandar128E4X>(
+        sensor_configuration, calibration_data, alive_cb, stuck_cb, status_cb, lost_cb,
+        std::move(blockage_mask_plugin));
+      break;
+    }
+    case SensorModel::HESAI_JT128: {
+      scan_decoder_ = initialize_decoder<JT128>(
         sensor_configuration, calibration_data, alive_cb, stuck_cb, status_cb, lost_cb,
         std::move(blockage_mask_plugin));
       break;

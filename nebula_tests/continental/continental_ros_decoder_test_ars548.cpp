@@ -216,7 +216,7 @@ void ContinentalRosDecoderTest::read_bag()
         serialization.deserialize_message(&extracted_serialized_msg, &extracted_msg);
 
         std::cout << "Found data in topic " << bag_message->topic_name << ": "
-                  << bag_message->time_stamp << std::endl;
+                  << get_bag_timestamp(bag_message) << std::endl;
 
         ASSERT_EQ(1, extracted_msg.packets.size());
 

@@ -744,6 +744,34 @@ protected:
   }
 };
 
+struct HesaiLidarStatusJT128 : public HesaiLidarStatus_AT128_QT128
+{
+  explicit HesaiLidarStatusJT128(Internal value)
+  : HesaiLidarStatus_AT128_QT128(value)
+  {
+  }
+
+protected:
+  [[nodiscard]] std::array<std::string, 9> get_temperature_names() const override
+  {
+    // JT128 exposes 9 temperature channels in the same layout as AT128/QT128.
+    // The official API docs for JT128 do not publish human-readable names for
+    // each channel, so we keep these generic to avoid misleading labeling.
+    return {
+      "temperature sensor 1",
+      "temperature sensor 2",
+      "temperature sensor 3",
+      "temperature sensor 4",
+      "temperature sensor 5",
+      "temperature sensor 6",
+      "temperature sensor 7",
+      "temperature sensor 8",
+      "temperature sensor 9",
+    };
+  }
+};
+
+
 struct HesaiLidarStatusOT128 : public HesaiLidarStatusBase
 {
   struct Internal : public HesaiLidarStatusBase::Internal

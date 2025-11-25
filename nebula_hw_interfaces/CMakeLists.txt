@@ -19,6 +19,7 @@ find_package(pandar_msgs)
 find_package(robosense_msgs)
 find_package(ros2_socketcan)
 find_package(velodyne_msgs)
+find_package(rosbag2_storage)
 
 # Common includes for all targets
 include_directories(
@@ -103,6 +104,11 @@ if(BUILD_TESTING)
 
     ament_add_gtest(test_udp
         test/common/test_udp.cpp
+    )
+    
+    ament_target_dependencies(test_udp
+        rcpputils
+        rosbag2_storage
     )
 
     target_include_directories(test_udp PUBLIC
