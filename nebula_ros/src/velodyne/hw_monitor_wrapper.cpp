@@ -247,13 +247,6 @@ VelodyneHwMonitorWrapper::velodyne_get_top_lm20_temp()
     val = boost::lexical_cast<double>(
       get_ptree_value(current_diag_tree_, mtx_diag_, key_volt_temp_top_lm20_temp));
     val = -1481.96 + std::sqrt(2.1962e6 + ((1.8639 - val * 5.0 / 4096.0) / 3.88e-6));
-    if (val < -25.0) {
-      level = diagnostic_msgs::msg::DiagnosticStatus::WARN;
-      error_mes = name_volt_temp_top_lm20_temp + message_sep_ + temperature_cold_message;
-    } else if (90.0 < val) {
-      level = diagnostic_msgs::msg::DiagnosticStatus::WARN;
-      error_mes = name_volt_temp_top_lm20_temp + message_sep_ + temperature_hot_message;
-    }
     //    mes = boost::lexical_cast<std::string>(val) + " C";
     mes = get_fixed_precision_string(val) + " C";
   } catch (boost::bad_lexical_cast & ex) {
@@ -501,13 +494,6 @@ VelodyneHwMonitorWrapper::velodyne_get_bot_lm20_temp()
     val = boost::lexical_cast<double>(
       get_ptree_value(current_diag_tree_, mtx_diag_, key_volt_temp_bot_lm20_temp));
     val = -1481.96 + std::sqrt(2.1962e6 + ((1.8639 - val * 5.0 / 4096.0) / 3.88e-6));
-    if (val < -25.0) {
-      level = diagnostic_msgs::msg::DiagnosticStatus::WARN;
-      error_mes = name_volt_temp_bot_lm20_temp + message_sep_ + temperature_cold_message;
-    } else if (90.0 < val) {
-      level = diagnostic_msgs::msg::DiagnosticStatus::WARN;
-      error_mes = name_volt_temp_bot_lm20_temp + message_sep_ + temperature_hot_message;
-    }
     //    mes = boost::lexical_cast<std::string>(val) + " C";
     mes = get_fixed_precision_string(val) + " C";
   } catch (boost::bad_lexical_cast & ex) {
