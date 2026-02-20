@@ -24,7 +24,8 @@ VelodyneDecoderWrapper::VelodyneDecoderWrapper(
 : status_(nebula::Status::NOT_INITIALIZED),
   logger_(parent_node->get_logger().get_child("VelodyneDecoder")),
   hw_interface_(hw_interface),
-  sensor_cfg_(config)
+  sensor_cfg_(config),
+  diagnostics_updater_((parent_node))
 {
   if (!config) {
     throw std::runtime_error(
@@ -76,13 +77,29 @@ VelodyneDecoderWrapper::VelodyneDecoderWrapper(
     parent_node->create_publisher<sensor_msgs::msg::PointCloud2>("aw_points_ex", pointcloud_qos);
 
   RCLCPP_INFO_STREAM(logger_, ". Wrapper=" << status_);
+  diagnostics_updater_.setHardwareID("/lidar_driver");
+
+  diagnostics_updater_.add(
+    "Status",
+    this,
+    &VelodyneDecoderWrapper::check_pointcloud_watchdog);
 
   cloud_watchdog_ =
     std::make_shared<WatchdogTimer>(*parent_node, 100'000us, [this, parent_node](bool ok) {
-      if (ok) return;
-      RCLCPP_WARN_ONCE(logger_, "Missing pointcloud output deadline");
+      if (ok) {
+        pointcloud_timeout_ = false;
+      } else {
+        pointcloud_timeout_ = true;
+
+        RCLCPP_WARN_THROTTLE(
+          logger_, *parent_node->get_clock(), 5000,
+          "Missed pointcloud output deadline");
+
+        diagnostics_updater_.force_update();  
+      }
     });
 }
+
 
 void VelodyneDecoderWrapper::on_config_change(
   const std::shared_ptr<const nebula::drivers::VelodyneSensorConfiguration> & new_config)
@@ -91,6 +108,20 @@ void VelodyneDecoderWrapper::on_config_change(
   auto new_driver = std::make_shared<drivers::VelodyneDriver>(new_config, calibration_cfg_ptr_);
   driver_ptr_ = new_driver;
   sensor_cfg_ = new_config;
+}
+
+void VelodyneDecoderWrapper::check_pointcloud_watchdog(
+  diagnostic_updater::DiagnosticStatusWrapper & stat)
+{
+  if (pointcloud_timeout_) {
+    stat.summary(
+      diagnostic_msgs::msg::DiagnosticStatus::ERROR,
+      "Missing Data");
+  } else {
+    stat.summary(
+      diagnostic_msgs::msg::DiagnosticStatus::OK,
+      "Pointcloud output OK");
+  }
 }
 
 void VelodyneDecoderWrapper::on_calibration_change(
