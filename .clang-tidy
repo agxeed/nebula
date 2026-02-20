@@ -1,5 +1,8 @@
 # All disabled checks have to come with an explanatory comment that states why they were disabled!
 #
+# bugprone-easily-swappable-parameters:
+#  Not always easily fixable, modern IDEs with parameter chips/hints help avoid this problem
+#
 # modernize-use-trailing-return-type:
 #  Purely stylistic, makes function signature longer
 #
@@ -12,6 +15,13 @@
 # hicpp-special-member-functions:
 #  Alias for cppcoreguidelines-special-member-functions, which is enabled. If both are enabled,
 #  the CheckOptions below have to be specified twice.
+#
+# hicpp-braces-around-statements:
+#  Alias for readability-braces-around-statements, which is enabled. If both are enabled,
+#  the CheckOptions below have to be specified twice.
+#
+# hicpp-signed-bitwise:
+#  This rule is buggy and flags bitwise operators on bools.
 Checks: "
   *,
   -abseil-*,
@@ -24,10 +34,13 @@ Checks: "
   -mpi-*,
   -objc-*,
   -zircon-*,
+  -bugprone-easily-swappable-parameters,
   -modernize-use-trailing-return-type,
   -readability-identifier-length,
   -readability-implicit-bool-conversion,
-  -hicpp-special-member-functions"
+  -hicpp-special-member-functions,
+  -hicpp-braces-around-statements,
+  -hicpp-signed-bitwise"
 
 # WarningsAsErrors have been taken from:
 # https://github.com/autowarefoundation/autoware/blob/3591106/.clang-tidy-ci
@@ -119,4 +132,14 @@ CheckOptions:
   - key: readability-identifier-naming.ConstexprVariableCase
     value: lower_case
   - key: cppcoreguidelines-special-member-functions.AllowSoleDefaultDtor
+    value: true
+    # Structs (e.g. sensor config) with functions like to_json() would otherwise be flagged as warnings
+  - key: misc-non-private-member-variables-in-classes.IgnoreClassesWithAllMemberVariablesBeingPublic
+    value: true
+    # Reduce boilerplate for things like guard clauses
+  - key: readability-braces-around-statements.ShortStatementLines
+    value: 2 # The definition is confusing, but everything >= 2 is flagged as a warning
+    # Macros like RCLCPP_INFO contribute large amounts to cognitive complexity, even if the
+    # containing function is simple.
+  - key: readability-function-cognitive-complexity.IgnoreMacros
     value: true
