@@ -116,11 +116,11 @@ void VelodyneDecoderWrapper::check_pointcloud_watchdog(
   if (pointcloud_timeout_) {
     stat.summary(
       diagnostic_msgs::msg::DiagnosticStatus::ERROR,
-      "Missing Data");
+      "No Data");
   } else {
     stat.summary(
       diagnostic_msgs::msg::DiagnosticStatus::OK,
-      "Pointcloud output OK");
+      "OK");
   }
 }
 
