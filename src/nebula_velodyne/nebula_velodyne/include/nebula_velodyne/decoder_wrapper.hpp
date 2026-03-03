@@ -91,6 +91,7 @@ private:
   
   diagnostic_updater::Updater diagnostics_updater_;
   bool pointcloud_timeout_{false};
+  bool pointcloud_received_once_{false};
 
 
   std::string calibration_file_path_{};

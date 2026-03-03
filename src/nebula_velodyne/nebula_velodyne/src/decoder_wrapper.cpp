@@ -88,6 +88,7 @@ VelodyneDecoderWrapper::VelodyneDecoderWrapper(
     std::make_shared<WatchdogTimer>(*parent_node, 100'000us, [this, parent_node](bool ok) {
       if (ok) {
         pointcloud_timeout_ = false;
+        pointcloud_received_once_ = true;
       } else {
         pointcloud_timeout_ = true;
 
@@ -114,13 +115,15 @@ void VelodyneDecoderWrapper::check_pointcloud_watchdog(
   diagnostic_updater::DiagnosticStatusWrapper & stat)
 {
   if (pointcloud_timeout_) {
-    stat.summary(
-      diagnostic_msgs::msg::DiagnosticStatus::ERROR,
-      "No Data");
-  } else {
-    stat.summary(
-      diagnostic_msgs::msg::DiagnosticStatus::OK,
-      "OK");
+    if(pointcloud_received_once_){ 
+      stat.summary(diagnostic_msgs::msg::DiagnosticStatus::ERROR,"No Data");
+    }
+    else{
+      stat.summary(diagnostic_msgs::msg::DiagnosticStatus::WARN,"Starting");
+    }
+  } 
+  else {
+    stat.summary(diagnostic_msgs::msg::DiagnosticStatus::OK,"OK");
   }
 }
 
