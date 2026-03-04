@@ -77,12 +77,9 @@ VelodyneDecoderWrapper::VelodyneDecoderWrapper(
     parent_node->create_publisher<sensor_msgs::msg::PointCloud2>("aw_points_ex", pointcloud_qos);
 
   RCLCPP_INFO_STREAM(logger_, ". Wrapper=" << status_);
-  diagnostics_updater_.setHardwareID("/lidar_driver");
+  diagnostics_updater_.setHardwareID(parent_node->get_fully_qualified_name());
 
-  diagnostics_updater_.add(
-    "Status",
-    this,
-    &VelodyneDecoderWrapper::check_pointcloud_watchdog);
+  diagnostics_updater_.add("Status", this, &VelodyneDecoderWrapper::check_pointcloud_watchdog);
 
   cloud_watchdog_ =
     std::make_shared<WatchdogTimer>(*parent_node, 100'000us, [this, parent_node](bool ok) {
