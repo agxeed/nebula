@@ -60,8 +60,8 @@ HesaiDecoderWrapper::HesaiDecoderWrapper(
 
   RCLCPP_INFO(logger_, "Starting Decoder");
 
-  initialize_functional_safety(diagnostic_updater, sensor_cfg_->functional_safety);
-  initialize_packet_loss_diagnostic(diagnostic_updater);
+  //initialize_functional_safety(diagnostic_updater, sensor_cfg_->functional_safety);
+  //initialize_packet_loss_diagnostic(diagnostic_updater);
 
   driver_ptr_ = initialize_driver(sensor_cfg_, calibration_cfg_ptr_);
   status_ = driver_ptr_->get_status();
@@ -97,7 +97,18 @@ HesaiDecoderWrapper::HesaiDecoderWrapper(
 
   RCLCPP_INFO_STREAM(logger_, ". Wrapper=" << status_);
 
-  diagnostic_updater.add(publish_diagnostic_);
+  diagnostic_updater.setHardwareID(parent_node->get_fully_qualified_name());
+  diagnostic_updater.add("Status",this,&HesaiDecoderWrapper::check_pointcloud_watchdog);
+  //diagnostic_updater.add(publish_diagnostic_);
+  cloud_watchdog_ =
+  std::make_shared<WatchdogTimer>(*parent_node, 100'000us, [this, parent_node](bool ok) {
+    if (ok) {
+      pointcloud_timeout_ = false;
+      pointcloud_received_once_ = true;
+    } else {
+      pointcloud_timeout_ = true;
+    }
+  });
 }
 
 void HesaiDecoderWrapper::on_config_change(
@@ -162,6 +173,10 @@ void HesaiDecoderWrapper::on_pointcloud_decoded(
   const drivers::NebulaPointCloudPtr & pointcloud, double timestamp_s)
 {
   util::Stopwatch publish_watch;
+
+  if (cloud_watchdog_) {
+    cloud_watchdog_->update();
+  }
 
   // Publish scan message only if it has been written to
   if (current_scan_msg_ && !current_scan_msg_->packets.empty() && packets_pub_thread_) {
@@ -340,6 +355,20 @@ std::shared_ptr<drivers::HesaiDriver> HesaiDecoderWrapper::initialize_driver(
     config, calibration, std::make_shared<drivers::loggers::RclcppLogger>(logger_),
     std::move(pointcloud_cb), std::move(alive_cb), std::move(stuck_cb), std::move(status_cb),
     std::move(lost_cb), std::move(blockage_mask_plugin));
+}
+
+void HesaiDecoderWrapper::check_pointcloud_watchdog(
+  diagnostic_updater::DiagnosticStatusWrapper & stat)
+{
+  if (pointcloud_timeout_) {
+    if (pointcloud_received_once_) {
+      stat.summary(diagnostic_msgs::msg::DiagnosticStatus::ERROR, "No Data");
+    } else {
+      stat.summary(diagnostic_msgs::msg::DiagnosticStatus::WARN, "Starting");
+    }
+  } else {
+    stat.summary(diagnostic_msgs::msg::DiagnosticStatus::OK, "OK");
+  }
 }
 
 nebula::Status HesaiDecoderWrapper::status()

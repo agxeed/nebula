@@ -17,6 +17,7 @@
 #include "nebula_core_ros/agnocast_wrapper/nebula_agnocast_wrapper.hpp"
 #include "nebula_core_ros/diagnostics/rate_bound_status.hpp"
 #include "nebula_core_ros/single_consumer_processor.hpp"
+#include "nebula_core_ros/watchdog_timer.hpp"
 #include "nebula_hesai/diagnostics/functional_safety_diagnostic_task.hpp"
 #include "nebula_hesai/diagnostics/packet_loss_diagnostic.hpp"
 #include "nebula_hesai_decoders/decoders/hesai_scan_decoder.hpp"
@@ -137,6 +138,8 @@ private:
   std::shared_ptr<drivers::HesaiDriver> initialize_driver(
     const std::shared_ptr<const drivers::HesaiSensorConfiguration> & config,
     const std::shared_ptr<const drivers::HesaiCalibrationConfigurationBase> & calibration);
+  
+  void check_pointcloud_watchdog(diagnostic_updater::DiagnosticStatusWrapper & stat);
 
   nebula::Status status_;
   rclcpp::Logger logger_;
@@ -164,6 +167,9 @@ private:
   std::optional<PacketLossDiagnosticTask> packet_loss_diagnostic_;
 
   autoware_utils_debug::DebugPublisher debug_publisher_;
+  bool pointcloud_timeout_{false};
+  bool pointcloud_received_once_{false};
+  std::shared_ptr<WatchdogTimer> cloud_watchdog_;
 
   struct PerformanceCounters
   {
