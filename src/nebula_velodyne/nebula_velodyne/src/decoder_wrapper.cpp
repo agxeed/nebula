@@ -82,18 +82,12 @@ VelodyneDecoderWrapper::VelodyneDecoderWrapper(
   diagnostics_updater_.add("Status", this, &VelodyneDecoderWrapper::check_pointcloud_watchdog);
 
   cloud_watchdog_ =
-    std::make_shared<WatchdogTimer>(*parent_node, 100'000us, [this, parent_node](bool ok) {
+    std::make_shared<WatchdogTimer>(*parent_node, 200'000us, [this, parent_node](bool ok) {
       if (ok) {
         pointcloud_timeout_ = false;
         pointcloud_received_once_ = true;
       } else {
         pointcloud_timeout_ = true;
-
-        RCLCPP_WARN_THROTTLE(
-          logger_, *parent_node->get_clock(), 5000,
-          "Missed pointcloud output deadline");
-
-        diagnostics_updater_.force_update();  
       }
     });
 }
