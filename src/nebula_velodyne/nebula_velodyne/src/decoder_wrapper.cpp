@@ -110,7 +110,7 @@ void VelodyneDecoderWrapper::check_pointcloud_watchdog(
       stat.summary(diagnostic_msgs::msg::DiagnosticStatus::ERROR,"No Data");
     }
     else{
-      stat.summary(diagnostic_msgs::msg::DiagnosticStatus::WARN,"Starting");
+      stat.summary(diagnostic_msgs::msg::DiagnosticStatus::ERROR,"Starting");
     }
   } 
   else {

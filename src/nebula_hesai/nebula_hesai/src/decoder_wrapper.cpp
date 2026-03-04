@@ -364,7 +364,7 @@ void HesaiDecoderWrapper::check_pointcloud_watchdog(
     if (pointcloud_received_once_) {
       stat.summary(diagnostic_msgs::msg::DiagnosticStatus::ERROR, "No Data");
     } else {
-      stat.summary(diagnostic_msgs::msg::DiagnosticStatus::WARN, "Starting");
+      stat.summary(diagnostic_msgs::msg::DiagnosticStatus::ERROR, "Starting");
     }
   } else {
     stat.summary(diagnostic_msgs::msg::DiagnosticStatus::OK, "OK");
