@@ -188,7 +188,7 @@ void HesaiDecoderWrapper::on_pointcloud_decoded(
     current_scan_msg_ = std::make_unique<pandar_msgs::msg::PandarScan>();
   }
 
-  rclcpp::Time cloud_stamp = rclcpp::Time(seconds_to_chrono_nano_seconds(timestamp_s).count());
+  rclcpp::Time cloud_stamp = current_scan_msg_->header.stamp;
 
   if (NEBULA_HAS_ANY_SUBSCRIPTIONS(nebula_points_pub_)) {
     auto ros_pc_msg_ptr = ALLOCATE_OUTPUT_MESSAGE_UNIQUE(nebula_points_pub_);
