@@ -98,7 +98,7 @@ HesaiDecoderWrapper::HesaiDecoderWrapper(
 
   RCLCPP_INFO_STREAM(logger_, ". Wrapper=" << status_);
 
-  diagnostics_updater_.setHardwareID(parent_node->get_fully_qualified_name());
+  //diagnostics_updater_.setHardwareID(parent_node->get_fully_qualified_name());
   diagnostics_updater_.add("Status", this, &HesaiDecoderWrapper::check_pointcloud_watchdog);
   //diagnostic_updater.add(publish_diagnostic_);
   cloud_watchdog_ =
@@ -176,6 +176,11 @@ void HesaiDecoderWrapper::on_pointcloud_decoded(
     cloud_watchdog_->update();
   }
 
+  rclcpp::Time cloud_stamp =
+    (current_scan_msg_ && !current_scan_msg_->packets.empty())
+      ? rclcpp::Time(current_scan_msg_->header.stamp)
+      : rclcpp::Time(seconds_to_chrono_nano_seconds(timestamp_s).count());
+
   // Publish scan message only if it has been written to
   if (current_scan_msg_ && !current_scan_msg_->packets.empty() && packets_pub_thread_) {
     bool success = packets_pub_thread_->try_push(std::move(current_scan_msg_));
@@ -185,8 +190,6 @@ void HesaiDecoderWrapper::on_pointcloud_decoded(
 
     current_scan_msg_ = std::make_unique<pandar_msgs::msg::PandarScan>();
   }
-
-  rclcpp::Time cloud_stamp = current_scan_msg_->header.stamp;
 
   if (NEBULA_HAS_ANY_SUBSCRIPTIONS(nebula_points_pub_)) {
     auto ros_pc_msg_ptr = ALLOCATE_OUTPUT_MESSAGE_UNIQUE(nebula_points_pub_);
@@ -358,6 +361,8 @@ std::shared_ptr<drivers::HesaiDriver> HesaiDecoderWrapper::initialize_driver(
 void HesaiDecoderWrapper::check_pointcloud_watchdog(
   diagnostic_updater::DiagnosticStatusWrapper & stat)
 {
+  stat.name = std::string(parent_node_.get_name()) + ": Status";
+
   if (pointcloud_timeout_) {
     if (pointcloud_received_once_) {
       stat.summary(diagnostic_msgs::msg::DiagnosticStatus::ERROR, "No Data");
