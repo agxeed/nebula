@@ -101,14 +101,9 @@ HesaiDecoderWrapper::HesaiDecoderWrapper(
   diagnostic_updater.add("Status",this,&HesaiDecoderWrapper::check_pointcloud_watchdog);
   //diagnostic_updater.add(publish_diagnostic_);
   cloud_watchdog_ =
-  std::make_shared<WatchdogTimer>(*parent_node, 200'000us, [this, parent_node](bool ok) {
-    if (ok) {
-      pointcloud_timeout_ = false;
-      pointcloud_received_once_ = true;
-    } else {
-      pointcloud_timeout_ = true;
-    }
-  });
+    std::make_shared<WatchdogTimer>(*parent_node, 200'000us, [this](bool ok) {
+      pointcloud_timeout_ = !ok;
+    });
 }
 
 void HesaiDecoderWrapper::on_config_change(
@@ -172,6 +167,8 @@ drivers::PacketDecodeResult HesaiDecoderWrapper::process_cloud_packet(
 void HesaiDecoderWrapper::on_pointcloud_decoded(
   const drivers::NebulaPointCloudPtr & pointcloud, double timestamp_s)
 {
+  pointcloud_received_once_ = true;
+
   util::Stopwatch publish_watch;
 
   if (cloud_watchdog_) {

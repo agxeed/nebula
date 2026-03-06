@@ -167,7 +167,7 @@ private:
   std::optional<PacketLossDiagnosticTask> packet_loss_diagnostic_;
 
   autoware_utils_debug::DebugPublisher debug_publisher_;
-  bool pointcloud_timeout_{false};
+  bool pointcloud_timeout_{true};
   bool pointcloud_received_once_{false};
   std::shared_ptr<WatchdogTimer> cloud_watchdog_;
 
