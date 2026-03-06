@@ -38,12 +38,13 @@ HesaiDecoderWrapper::HesaiDecoderWrapper(
   rclcpp::Node * parent_node,
   const std::shared_ptr<const nebula::drivers::HesaiSensorConfiguration> & config,
   const std::shared_ptr<const drivers::HesaiCalibrationConfigurationBase> & calibration,
-  diagnostic_updater::Updater & diagnostic_updater, bool publish_packets)
+ bool publish_packets)
 : status_(nebula::Status::NOT_INITIALIZED),
   logger_(parent_node->get_logger().get_child("HesaiDecoder")),
   parent_node_(*parent_node),
   sensor_cfg_(config),
   calibration_cfg_ptr_(calibration),
+  diagnostics_updater_(parent_node),
   publish_diagnostic_(make_rate_bound_status(sensor_cfg_->rotation_speed, *parent_node)),
   debug_publisher_(parent_node, "nebula")
 {
@@ -97,8 +98,8 @@ HesaiDecoderWrapper::HesaiDecoderWrapper(
 
   RCLCPP_INFO_STREAM(logger_, ". Wrapper=" << status_);
 
-  diagnostic_updater.setHardwareID(parent_node->get_fully_qualified_name());
-  diagnostic_updater.add("Status",this,&HesaiDecoderWrapper::check_pointcloud_watchdog);
+  diagnostics_updater_.setHardwareID(parent_node->get_fully_qualified_name());
+  diagnostics_updater_.add("Status", this, &HesaiDecoderWrapper::check_pointcloud_watchdog);
   //diagnostic_updater.add(publish_diagnostic_);
   cloud_watchdog_ =
     std::make_shared<WatchdogTimer>(*parent_node, 200'000us, [this](bool ok) {

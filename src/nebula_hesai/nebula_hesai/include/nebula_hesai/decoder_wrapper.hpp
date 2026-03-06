@@ -51,7 +51,7 @@ public:
     rclcpp::Node * parent_node,
     const std::shared_ptr<const nebula::drivers::HesaiSensorConfiguration> & config,
     const std::shared_ptr<const nebula::drivers::HesaiCalibrationConfigurationBase> & calibration,
-    diagnostic_updater::Updater & diagnostic_updater, bool publish_packets);
+     bool publish_packets);
 
   /// @brief Process a cloud packet and return metadata
   /// @param packet_msg The packet to process
@@ -162,6 +162,7 @@ private:
 
   NEBULA_PUBLISHER_PTR(sensor_msgs::msg::Image) blockage_mask_pub_;
 
+  diagnostic_updater::Updater diagnostics_updater_;
   custom_diagnostic_tasks::RateBoundStatus publish_diagnostic_;
   std::optional<FunctionalSafetyDiagnosticTask> functional_safety_diagnostic_;
   std::optional<PacketLossDiagnosticTask> packet_loss_diagnostic_;
