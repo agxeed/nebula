@@ -176,10 +176,7 @@ void HesaiDecoderWrapper::on_pointcloud_decoded(
     cloud_watchdog_->update();
   }
 
-  rclcpp::Time cloud_stamp =
-    (current_scan_msg_ && !current_scan_msg_->packets.empty())
-      ? rclcpp::Time(current_scan_msg_->header.stamp)
-      : rclcpp::Time(seconds_to_chrono_nano_seconds(timestamp_s).count());
+  rclcpp::Time cloud_stamp = current_scan_msg_->header.stamp;
 
   // Publish scan message only if it has been written to
   if (current_scan_msg_ && !current_scan_msg_->packets.empty() && packets_pub_thread_) {
