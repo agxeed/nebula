@@ -102,7 +102,7 @@ HesaiDecoderWrapper::HesaiDecoderWrapper(
   diagnostics_updater_.add("Status", this, &HesaiDecoderWrapper::check_pointcloud_watchdog);
   //diagnostic_updater.add(publish_diagnostic_);
   cloud_watchdog_ =
-    std::make_shared<WatchdogTimer>(*parent_node, 200'000us, [this](bool ok) {
+    std::make_shared<WatchdogTimer>(*parent_node, 500'000us, [this](bool ok) {
       pointcloud_timeout_ = !ok;
     });
 }
