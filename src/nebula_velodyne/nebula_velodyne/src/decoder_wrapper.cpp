@@ -24,7 +24,8 @@ VelodyneDecoderWrapper::VelodyneDecoderWrapper(
 : status_(nebula::Status::NOT_INITIALIZED),
   logger_(parent_node->get_logger().get_child("VelodyneDecoder")),
   hw_interface_(hw_interface),
-  sensor_cfg_(config)
+  sensor_cfg_(config),
+  diagnostics_updater_((parent_node))
 {
   if (!config) {
     throw std::runtime_error(
@@ -76,13 +77,21 @@ VelodyneDecoderWrapper::VelodyneDecoderWrapper(
     parent_node->create_publisher<sensor_msgs::msg::PointCloud2>("aw_points_ex", pointcloud_qos);
 
   RCLCPP_INFO_STREAM(logger_, ". Wrapper=" << status_);
+  diagnostics_updater_.setHardwareID(parent_node->get_fully_qualified_name());
+
+  diagnostics_updater_.add("Status", this, &VelodyneDecoderWrapper::check_pointcloud_watchdog);
 
   cloud_watchdog_ =
-    std::make_shared<WatchdogTimer>(*parent_node, 100'000us, [this, parent_node](bool ok) {
-      if (ok) return;
-      RCLCPP_WARN_ONCE(logger_, "Missing pointcloud output deadline");
+    std::make_shared<WatchdogTimer>(*parent_node, 200'000us, [this, parent_node](bool ok) {
+      if (ok) {
+        pointcloud_timeout_ = false;
+        pointcloud_received_once_ = true;
+      } else {
+        pointcloud_timeout_ = true;
+      }
     });
 }
+
 
 void VelodyneDecoderWrapper::on_config_change(
   const std::shared_ptr<const nebula::drivers::VelodyneSensorConfiguration> & new_config)
@@ -91,6 +100,22 @@ void VelodyneDecoderWrapper::on_config_change(
   auto new_driver = std::make_shared<drivers::VelodyneDriver>(new_config, calibration_cfg_ptr_);
   driver_ptr_ = new_driver;
   sensor_cfg_ = new_config;
+}
+
+void VelodyneDecoderWrapper::check_pointcloud_watchdog(
+  diagnostic_updater::DiagnosticStatusWrapper & stat)
+{
+  if (pointcloud_timeout_) {
+    if(pointcloud_received_once_){ 
+      stat.summary(diagnostic_msgs::msg::DiagnosticStatus::ERROR,"No Data");
+    }
+    else{
+      stat.summary(diagnostic_msgs::msg::DiagnosticStatus::ERROR,"Starting");
+    }
+  } 
+  else {
+    stat.summary(diagnostic_msgs::msg::DiagnosticStatus::OK,"OK");
+  }
 }
 
 void VelodyneDecoderWrapper::on_calibration_change(

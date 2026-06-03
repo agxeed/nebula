@@ -98,7 +98,7 @@ HesaiRosWrapper::HesaiRosWrapper(const rclcpp::NodeOptions & options)
   }
 
   decoder_wrapper_.emplace(
-    this, sensor_cfg_ptr_, calibration_result.value(), diagnostic_updater_functional_safety_,
+    this, sensor_cfg_ptr_, calibration_result.value(), 
     launch_hw_);
 
   RCLCPP_DEBUG(get_logger(), "Starting stream");

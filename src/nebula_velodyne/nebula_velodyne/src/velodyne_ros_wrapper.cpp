@@ -22,7 +22,6 @@ VelodyneRosWrapper::VelodyneRosWrapper(const rclcpp::NodeOptions & options)
   wrapper_status_(Status::NOT_INITIALIZED),
   sensor_cfg_ptr_(nullptr)
 {
-  hw_reconfigure_timer_->cancel();
   setvbuf(stdout, NULL, _IONBF, BUFSIZ);
 
   wrapper_status_ = declare_and_get_sensor_config_params();
@@ -33,10 +32,10 @@ VelodyneRosWrapper::VelodyneRosWrapper(const rclcpp::NodeOptions & options)
 
   RCLCPP_INFO_STREAM(get_logger(), "Sensor Configuration: " << *sensor_cfg_ptr_);
 
-  launch_hw_ = declare_parameter<bool>("launch_hw", param_read_write());
-  use_udp_only_ = declare_parameter<bool>("udp_only", param_read_only());
+  launch_hw_ = declare_parameter<bool>("launch_hw", param_read_only());
+  bool use_udp_only = declare_parameter<bool>("udp_only", param_read_only());
 
-  if (use_udp_only_) {
+  if (use_udp_only) {
     RCLCPP_INFO_STREAM(
       get_logger(),
       "UDP-only mode is enabled. Settings checks, synchronization, and diagnostics publishing are "
@@ -60,79 +59,18 @@ VelodyneRosWrapper::VelodyneRosWrapper(const rclcpp::NodeOptions & options)
       [this](const auto & packet) { receive_cloud_packet_callback(packet); });
     stream_start();
   } else {
-    create_packet_subscriber();
+    packets_sub_ = create_subscription<velodyne_msgs::msg::VelodyneScan>(
+      "velodyne_packets", rclcpp::SensorDataQoS(),
+      std::bind(&VelodyneRosWrapper::receive_scan_message_callback, this, std::placeholders::_1));
+    RCLCPP_INFO_STREAM(
+      get_logger(),
+      "Hardware connection disabled, listening for packets on " << packets_sub_->get_topic_name());
   }
-
-  setup_decoder();
 
   // Register parameter callback after all params have been declared. Otherwise it would be called
   // once for each declaration
   parameter_event_cb_ = add_on_set_parameters_callback(
     std::bind(&VelodyneRosWrapper::on_parameter_change, this, std::placeholders::_1));
-}
-
-void VelodyneRosWrapper::reconfigure_hw_interface()
-{
-  if (restart_hw_) {
-    bringup_hw(use_udp_only_);
-    setup_decoder();
-    restart_hw_ = false;
-    hw_reconfigure_timer_->cancel();
-  }
-
-  if (restart_packet_subscriber_) {
-    create_packet_subscriber();
-    setup_decoder();
-    restart_packet_subscriber_ = false;
-    hw_reconfigure_timer_->cancel();
-  }
-}
-
-void VelodyneRosWrapper::create_packet_subscriber()
-{
-  packets_sub_ = create_subscription<velodyne_msgs::msg::VelodyneScan>(
-    "velodyne_packets", rclcpp::SensorDataQoS(),
-    std::bind(&VelodyneRosWrapper::receive_scan_message_callback, this, std::placeholders::_1));
-  RCLCPP_INFO_STREAM(
-    get_logger(),
-    "Hardware connection disabled, listening for packets on " << packets_sub_->get_topic_name());
-}
-
-void VelodyneRosWrapper::set_decoder_wrapper()
-{
-  // If there's an existing decoder wrapper, reset it
-  if (decoder_wrapper_) {
-    decoder_wrapper_.reset();
-  }
-  decoder_wrapper_.emplace(
-    this, hw_interface_wrapper_ ? hw_interface_wrapper_->hw_interface() : nullptr, sensor_cfg_ptr_);
-}
-
-void VelodyneRosWrapper::decoder_wrapper_thread(std::stop_token stoken)
-{
-  RCLCPP_DEBUG(get_logger(), "Starting stream");
-
-  while (!stoken.stop_requested()) {
-    auto [packet, valid] = packet_queue_.pop(std::chrono::milliseconds(100));
-    if (valid) {
-      decoder_wrapper_->process_cloud_packet(std::move(packet));
-    } else {
-      continue;
-    }
-  }
-  RCLCPP_INFO(get_logger(), "Gracefully stopped decoder thread");
-}
-
-void VelodyneRosWrapper::bringup_hw(bool use_udp_only)
-{
-  hw_interface_wrapper_.emplace(this, sensor_cfg_ptr_, use_udp_only);
-
-  if (!use_udp_only) {  // hardware monitor requires HTTP connection
-    hw_monitor_wrapper_.emplace(this, hw_interface_wrapper_->hw_interface(), sensor_cfg_ptr_);
-  }
-  hw_interface_wrapper_->hw_interface()->register_scan_callback(
-    std::bind(&VelodyneRosWrapper::receive_cloud_packet_callback, this, std::placeholders::_1));
-  stream_start();
 }
 
 nebula::Status VelodyneRosWrapper::declare_and_get_sensor_config_params()
@@ -254,38 +192,6 @@ Status VelodyneRosWrapper::stream_start()
   return hw_interface_wrapper_->hw_interface()->sensor_interface_start();
 }
 
-void VelodyneRosWrapper::cleanup_on_hw_reconfigure()
-{
-  while (true) {
-    if (decoder_thread_.joinable()) {
-      stop_decoder_thread();
-      break;
-    }
-  }
-  decoder_thread_.join();
-  if (hw_interface_wrapper_) {
-    hw_interface_wrapper_.reset();
-  }
-  if (hw_monitor_wrapper_) {
-    hw_monitor_wrapper_.reset();
-  }
-}
-
-void VelodyneRosWrapper::setup_decoder()
-{
-  set_decoder_wrapper();
-  decoder_thread_ = std::jthread(&VelodyneRosWrapper::decoder_wrapper_thread, this);
-  // Set the thread name
-  pthread_setname_np(decoder_thread_.native_handle(), "VelDecThread");  // debug only
-}
-
-void VelodyneRosWrapper::reset_packet_subscriber()
-{
-  if (packets_sub_) {
-    packets_sub_.reset();
-  }
-}
-
 rcl_interfaces::msg::SetParametersResult VelodyneRosWrapper::on_parameter_change(
   const std::vector<rclcpp::Parameter> & p)
 {
@@ -308,27 +214,7 @@ rcl_interfaces::msg::SetParametersResult VelodyneRosWrapper::on_parameter_change
     get_param(p, "max_range", new_cfg.max_range) |
     get_param(p, "rotation_speed", new_cfg.rotation_speed) |
     get_param(p, "cloud_min_angle", new_cfg.cloud_min_angle) |
-    get_param(p, "cloud_max_angle", new_cfg.cloud_max_angle) |
-    get_param(p, "launch_hw", launch_hw_);
-
-  if (got_any && launch_hw_ && !hw_interface_wrapper_) {
-    RCLCPP_INFO(get_logger(), "Cancelling packet subscription...");
-    reset_packet_subscriber();
-    RCLCPP_INFO(get_logger(), "Resetting HW interface and HW Monitor wrappers...");
-    cleanup_on_hw_reconfigure();
-    RCLCPP_INFO(get_logger(), "(re)Configuring HW interface");
-    restart_hw_ = true;
-    hw_reconfigure_timer_->reset();
-  }
-
-  if (got_any && !launch_hw_ && hw_interface_wrapper_) {
-    RCLCPP_INFO(get_logger(), "Resetting HW interface and HW Monitor wrappers...");
-    cleanup_on_hw_reconfigure();
-    reset_packet_subscriber();
-    RCLCPP_INFO(get_logger(), "(re) Configuring packet subscriber");
-    restart_packet_subscriber_ = true;
-    hw_reconfigure_timer_->reset();
-  }
+    get_param(p, "cloud_max_angle", new_cfg.cloud_max_angle);
 
   // Currently, HW interface and monitor wrappers have only read-only parameters, so their update
   // logic is not implemented

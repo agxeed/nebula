@@ -17,6 +17,7 @@
 #include "nebula_core_ros/parameter_descriptors.hpp"
 #include "nebula_core_ros/watchdog_timer.hpp"
 
+#include <diagnostic_updater/diagnostic_updater.hpp>
 #include <nebula_core_common/nebula_common.hpp>
 #include <nebula_core_common/util/expected.hpp>
 #include <nebula_velodyne_common/velodyne_common.hpp>
@@ -48,7 +49,7 @@ public:
     std::shared_ptr<const nebula::drivers::VelodyneSensorConfiguration> & config);
 
   void process_cloud_packet(std::unique_ptr<nebula_msgs::msg::NebulaPacket> packet_msg);
-
+    void check_pointcloud_watchdog(diagnostic_updater::DiagnosticStatusWrapper & stat);
   void on_config_change(
     const std::shared_ptr<const nebula::drivers::VelodyneSensorConfiguration> & new_config);
 
@@ -83,8 +84,15 @@ private:
   nebula::Status status_;
   rclcpp::Logger logger_;
 
+
   const std::shared_ptr<nebula::drivers::VelodyneHwInterface> hw_interface_;
   std::shared_ptr<const nebula::drivers::VelodyneSensorConfiguration> sensor_cfg_;
+  
+  
+  diagnostic_updater::Updater diagnostics_updater_;
+  bool pointcloud_timeout_{false};
+  bool pointcloud_received_once_{false};
+
 
   std::string calibration_file_path_{};
   std::shared_ptr<const drivers::VelodyneCalibrationConfiguration> calibration_cfg_ptr_{};
