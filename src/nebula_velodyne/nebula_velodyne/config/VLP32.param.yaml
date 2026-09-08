@@ -20,4 +20,4 @@
     sensor_model: VLP32
     rotation_speed: 600
     return_mode: Dual
-      retry_hw: false
+    retry_hw: false
