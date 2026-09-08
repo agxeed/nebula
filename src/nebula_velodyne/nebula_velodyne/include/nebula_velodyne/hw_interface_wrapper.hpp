@@ -20,6 +20,7 @@
 #include <nebula_velodyne_hw_interfaces/velodyne_hw_interface.hpp>
 #include <rclcpp/rclcpp.hpp>
 
+#include <chrono>
 #include <memory>
 
 namespace nebula::ros
@@ -34,16 +35,26 @@ public:
 
   void on_config_change(
     const std::shared_ptr<const nebula::drivers::VelodyneSensorConfiguration> & new_config);
+  void on_sensor_packet_received();
 
   nebula::Status status();
 
   std::shared_ptr<drivers::VelodyneHwInterface> hw_interface() const;
 
 private:
+  bool is_sensor_http_reachable();
+  void monitor_sensor_reconnection();
+
   std::shared_ptr<drivers::VelodyneHwInterface> hw_interface_;
   rclcpp::Logger logger_;
   nebula::Status status_;
   bool setup_sensor_;
   bool use_udp_only_;
+  bool retry_hw_;
+  bool sensor_operational_{false};
+  bool reconnect_configuration_applied_{false};
+  std::chrono::steady_clock::time_point last_packet_time_{};
+  rclcpp::TimerBase::SharedPtr reconnect_monitor_timer_;
+  std::shared_ptr<const nebula::drivers::VelodyneSensorConfiguration> sensor_configuration_;
 };
 }  // namespace nebula::ros

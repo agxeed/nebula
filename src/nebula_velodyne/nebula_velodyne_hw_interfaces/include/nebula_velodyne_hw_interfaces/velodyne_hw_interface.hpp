@@ -100,7 +100,7 @@ private:
   }
 
   nebula::util::expected<std::string, VelodyneStatus> http_get_request(
-    const std::string & endpoint);
+    const std::string & endpoint, int timeout_ms = 500);
   nebula::util::expected<std::string, VelodyneStatus> http_post_request(
     const std::string & endpoint, const std::string & body);
 
