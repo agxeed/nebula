@@ -27,6 +27,9 @@
         "setup_sensor": {
           "$ref": "../../../nebula_core/nebula_core_ros/schema/hardware.json#/definitions/setup_sensor"
         },
+        "retry_hw": {
+          "$ref": "../../../nebula_core/nebula_core_ros/schema/hardware.json#/definitions/retry_hw"
+        },
         "udp_only": {
           "$ref": "../../../nebula_core/nebula_core_ros/schema/hardware.json#/definitions/udp_only"
         },

@@ -248,6 +248,10 @@ rcl_interfaces::msg::SetParametersResult VelodyneRosWrapper::on_parameter_change
 
 void VelodyneRosWrapper::receive_cloud_packet_callback(const std::vector<uint8_t> & packet)
 {
+  if (hw_interface_wrapper_) {
+    hw_interface_wrapper_->on_sensor_packet_received();
+  }
+
   if (!decoder_wrapper_ || decoder_wrapper_->status() != Status::OK) {
     return;
   }
