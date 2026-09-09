@@ -17,7 +17,7 @@
 #include "nebula_core_ros/parameter_descriptors.hpp"
 #include "nebula_velodyne/decoder_wrapper.hpp"
 #include "nebula_velodyne/hw_interface_wrapper.hpp"
-#include "nebula_velodyne/hw_monitor_wrapper.hpp"
+
 
 #include <nebula_core_common/nebula_common.hpp>
 #include <nebula_core_common/nebula_status.hpp>
@@ -25,9 +25,8 @@
 #include <nebula_velodyne_hw_interfaces/velodyne_hw_interface.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
-
+#include <sensor_msgs/msg/point_cloud2.hpp>
 #include <nebula_msgs/msg/nebula_packet.hpp>
-#include <velodyne_msgs/msg/velodyne_scan.hpp>
 
 #include <boost/algorithm/string/join.hpp>
 #include <boost/asio.hpp>
@@ -61,8 +60,6 @@ public:
 private:
   void receive_cloud_packet_callback(const std::vector<uint8_t> & packet);
 
-  void receive_scan_message_callback(std::unique_ptr<velodyne_msgs::msg::VelodyneScan> scan_msg);
-
   Status declare_and_get_sensor_config_params();
 
   /// @brief rclcpp parameter callback
@@ -74,16 +71,13 @@ private:
   Status validate_and_set_config(
     std::shared_ptr<const drivers::VelodyneSensorConfiguration> & new_config);
 
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_pub_;
+
   Status wrapper_status_;
 
   std::shared_ptr<const nebula::drivers::VelodyneSensorConfiguration> sensor_cfg_ptr_{};
 
-  rclcpp::Subscription<velodyne_msgs::msg::VelodyneScan>::SharedPtr packets_sub_{};
-
-  bool launch_hw_;
-
   std::optional<VelodyneHwInterfaceWrapper> hw_interface_wrapper_;
-  std::optional<VelodyneHwMonitorWrapper> hw_monitor_wrapper_;
   std::optional<VelodyneDecoderWrapper> decoder_wrapper_;
 
   std::mutex mtx_config_;

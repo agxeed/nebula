@@ -3,6 +3,7 @@
 #include "nebula_velodyne/velodyne_ros_wrapper.hpp"
 
 #include <nebula_core_common/util/string_conversions.hpp>
+#include <nebula_core_ros/point_cloud_conversions.hpp>
 
 #include <algorithm>
 #include <cstdio>
@@ -32,40 +33,47 @@ VelodyneRosWrapper::VelodyneRosWrapper(const rclcpp::NodeOptions & options)
 
   RCLCPP_INFO_STREAM(get_logger(), "Sensor Configuration: " << *sensor_cfg_ptr_);
 
-  launch_hw_ = declare_parameter<bool>("launch_hw", param_read_only());
-  bool use_udp_only = declare_parameter<bool>("udp_only", param_read_only());
 
-  if (use_udp_only) {
-    RCLCPP_INFO_STREAM(
-      get_logger(),
-      "UDP-only mode is enabled. Settings checks, synchronization, and diagnostics publishing are "
-      "disabled.");
-  }
+  hw_interface_wrapper_.emplace(this, sensor_cfg_ptr_);
 
-  if (launch_hw_) {
-    hw_interface_wrapper_.emplace(this, sensor_cfg_ptr_, use_udp_only);
-    if (!use_udp_only) {  // hardware monitor requires HTTP connection
-      hw_monitor_wrapper_.emplace(this, hw_interface_wrapper_->hw_interface(), sensor_cfg_ptr_);
-    }
-  }
+
+  auto qos_profile = rmw_qos_profile_sensor_data; // Move to agx_lidar rops_node later
+  auto pointcloud_qos =
+    rclcpp::QoS(rclcpp::QoSInitialization(qos_profile.history, 10), qos_profile);
+
+  pointcloud_pub_ =
+    create_publisher<sensor_msgs::msg::PointCloud2>(
+      "velodyne_points",
+      pointcloud_qos);
 
   decoder_wrapper_.emplace(
-    this, hw_interface_wrapper_ ? hw_interface_wrapper_->hw_interface() : nullptr, sensor_cfg_ptr_);
+  this,
+  sensor_cfg_ptr_,
+  [this](
+    nebula::drivers::NebulaPointCloudPtr pointcloud,
+    double timestamp)
+  {
+    //Temporary publisher (just for test)
+    auto msg =
+      std::make_unique<sensor_msgs::msg::PointCloud2>();
 
+    *msg = nebula::ros::to_ros_msg(*pointcloud);
+
+    msg->header.frame_id = sensor_cfg_ptr_->frame_id;
+
+    msg->header.stamp =
+      rclcpp::Time(static_cast<int64_t>(timestamp * 1e9));
+
+    pointcloud_pub_->publish(std::move(msg));
+  });
   RCLCPP_DEBUG(get_logger(), "Starting stream");
 
-  if (launch_hw_) {
-    hw_interface_wrapper_->hw_interface()->register_scan_callback(
-      [this](const auto & packet) { receive_cloud_packet_callback(packet); });
-    stream_start();
-  } else {
-    packets_sub_ = create_subscription<velodyne_msgs::msg::VelodyneScan>(
-      "velodyne_packets", rclcpp::SensorDataQoS(),
-      std::bind(&VelodyneRosWrapper::receive_scan_message_callback, this, std::placeholders::_1));
-    RCLCPP_INFO_STREAM(
-      get_logger(),
-      "Hardware connection disabled, listening for packets on " << packets_sub_->get_topic_name());
-  }
+  hw_interface_wrapper_->hw_interface()->register_scan_callback(
+    [this](const auto & packet) {
+      receive_cloud_packet_callback(packet);
+    });
+
+  stream_start();
 
   // Register parameter callback after all params have been declared. Otherwise it would be called
   // once for each declaration
@@ -143,35 +151,13 @@ Status VelodyneRosWrapper::validate_and_set_config(
   if (hw_interface_wrapper_) {
     hw_interface_wrapper_->on_config_change(new_config);
   }
-  if (hw_monitor_wrapper_) {
-    hw_monitor_wrapper_->on_config_change(new_config);
-  }
+
   if (decoder_wrapper_) {
     decoder_wrapper_->on_config_change(new_config);
   }
 
   sensor_cfg_ptr_ = new_config;
   return Status::OK;
-}
-
-void VelodyneRosWrapper::receive_scan_message_callback(
-  std::unique_ptr<velodyne_msgs::msg::VelodyneScan> scan_msg)
-{
-  if (hw_interface_wrapper_) {
-    RCLCPP_ERROR_THROTTLE(
-      get_logger(), *get_clock(), 1000,
-      "Ignoring received VelodyneScan. Launch with launch_hw:=false to enable VelodyneScan "
-      "replay.");
-    return;
-  }
-
-  for (auto & pkt : scan_msg->packets) {
-    auto nebula_pkt_ptr = std::make_unique<nebula_msgs::msg::NebulaPacket>();
-    nebula_pkt_ptr->stamp = pkt.stamp;
-    std::copy(pkt.data.begin(), pkt.data.end(), std::back_inserter(nebula_pkt_ptr->data));
-
-    decoder_wrapper_->process_cloud_packet(std::move(nebula_pkt_ptr));
-  }
 }
 
 Status VelodyneRosWrapper::get_status()
@@ -216,14 +202,6 @@ rcl_interfaces::msg::SetParametersResult VelodyneRosWrapper::on_parameter_change
     get_param(p, "cloud_min_angle", new_cfg.cloud_min_angle) |
     get_param(p, "cloud_max_angle", new_cfg.cloud_max_angle);
 
-  // Currently, HW interface and monitor wrappers have only read-only parameters, so their update
-  // logic is not implemented
-  if (decoder_wrapper_) {
-    auto result = decoder_wrapper_->on_parameter_change(p);
-    if (!result.successful) {
-      return result;
-    }
-  }
 
   if (!got_any) {
     return rcl_interfaces::build<SetParametersResult>().successful(true).reason("");

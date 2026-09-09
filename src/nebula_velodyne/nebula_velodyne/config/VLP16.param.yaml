@@ -1,16 +1,11 @@
 /**:
   ros__parameters:
-    host_ip: 192.168.1.10
+    host_ip: 192.168.1.8
     sensor_ip: 192.168.1.201
     data_port: 2368
     gnss_port: 2369
     packet_mtu_size: 1500
-    launch_hw: true
-    setup_sensor: true
-    udp_only: false
-    frame_id: velodyne
-    advanced_diagnostics: false
-    diag_span: 1000
+    frame_id: lidar
     calibration_file: $(find-pkg-share nebula_velodyne_decoders)/calibration/VLP16.yaml
     min_range: 0.3
     max_range: 300.0
@@ -19,5 +14,4 @@
     scan_phase: 0.0
     sensor_model: VLP16
     rotation_speed: 600
-    return_mode: Dual
-    retry_hw: false
+    return_mode: SingleStrongest

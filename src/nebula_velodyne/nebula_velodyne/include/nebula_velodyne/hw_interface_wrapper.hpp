@@ -30,8 +30,7 @@ class VelodyneHwInterfaceWrapper
 public:
   VelodyneHwInterfaceWrapper(
     rclcpp::Node * const parent_node,
-    std::shared_ptr<const nebula::drivers::VelodyneSensorConfiguration> & config,
-    bool use_udp_only = false);
+    std::shared_ptr<const nebula::drivers::VelodyneSensorConfiguration> & config);
 
   void on_config_change(
     const std::shared_ptr<const nebula::drivers::VelodyneSensorConfiguration> & new_config);
@@ -42,15 +41,11 @@ public:
   std::shared_ptr<drivers::VelodyneHwInterface> hw_interface() const;
 
 private:
-  bool is_sensor_http_reachable();
   void monitor_sensor_reconnection();
 
   std::shared_ptr<drivers::VelodyneHwInterface> hw_interface_;
   rclcpp::Logger logger_;
   nebula::Status status_;
-  bool setup_sensor_;
-  bool use_udp_only_;
-  bool retry_hw_;
   bool sensor_operational_{false};
   bool reconnect_configuration_applied_{false};
   std::chrono::steady_clock::time_point last_packet_time_{};

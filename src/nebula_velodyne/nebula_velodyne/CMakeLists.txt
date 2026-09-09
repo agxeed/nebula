@@ -9,7 +9,7 @@ autoware_package()
 add_library(
   velodyne_ros_wrapper SHARED
   src/velodyne_ros_wrapper.cpp src/decoder_wrapper.cpp
-  src/hw_interface_wrapper.cpp src/hw_monitor_wrapper.cpp)
+  src/hw_interface_wrapper.cpp)
 
 target_include_directories(
   velodyne_ros_wrapper
