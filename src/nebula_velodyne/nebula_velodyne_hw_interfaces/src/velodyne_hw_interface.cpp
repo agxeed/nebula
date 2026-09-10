@@ -20,10 +20,12 @@ VelodyneHwInterface::VelodyneHwInterface(const std::shared_ptr<loggers::Logger> 
 }
 
 nebula::util::expected<std::string, VelodyneStatus> VelodyneHwInterface::http_get_request(
-  const std::string & endpoint)
+  const std::string & endpoint, int timeout_ms)
 {
   std::lock_guard lock(mtx_inflight_request_);
-  auto do_request = [this, &endpoint]() { return http_client_->get(endpoint); };
+  auto do_request = [this, &endpoint, timeout_ms]() {
+    return http_client_->get(endpoint, timeout_ms);
+  };
   return do_http_request_with_retries(do_request);
 }
 
@@ -263,7 +265,8 @@ nebula::util::expected<std::string, VelodyneStatus> VelodyneHwInterface::get_dia
 
 nebula::util::expected<std::string, VelodyneStatus> VelodyneHwInterface::get_snapshot()
 {
-  return http_get_request(target_snapshot_);
+  constexpr int snapshot_timeout_ms = 10000;
+  return http_get_request(target_snapshot_, snapshot_timeout_ms);
 }
 
 VelodyneStatus VelodyneHwInterface::set_rpm(uint16_t rpm)
